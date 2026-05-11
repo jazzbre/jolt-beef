@@ -14,9 +14,16 @@ namespace example
 		static BroadPhaseLayerInterface* broadPhaseLayerInterface;
 		static ObjectLayerPairFilter* objectLayerPairFilter;
 		static ObjectVsBroadPhaseLayerFilter* objectVsBroadPhaseLayerFilter;
+		static BroadPhaseLayerFilter_Procs broadPhaseLayerFilterProcs;
+		static BroadPhaseLayerFilter* broadPhaseLayerFilter;
 		static PhysicsSystem* physicsSystem;
 		static BodyInterface* bodyInterface;
 		static BodyID dynamicBody;
+
+		static bool BroadPhaseShouldCollide(void* userData, BroadPhaseLayer layer)
+		{
+			return true;
+		}
 
 		static BodyID CreateBody(Shape* shape, RVec3 position, MotionType motionType, ObjectLayer objectLayer, Activation activation = .Activate)
 		{
@@ -56,11 +63,25 @@ namespace example
 			return bodyID;
 		}
 
+		static void RunBroadPhaseFilterQuery()
+		{
+			NarrowPhaseQuery* query = JPH.JPH_PhysicsSystem_GetNarrowPhaseQueryNoLock(physicsSystem);
+			RVec3 origin = .(0.0f, 100.0f, 0.0f);
+			Vec3 direction = .(0.0f, -200.0f, 0.0f);
+			RayCastResult hit = default;
+			JPH.JPH_NarrowPhaseQuery_CastRay(query, &origin, &direction, &hit, broadPhaseLayerFilter, null, null);
+		}
+
 		static void InitPhysics(bool interactive)
 		{
 			JPH.JPH_Init();
 
 			jobSystem = JPH.JPH_JobSystemThreadPool_Create(null);
+
+			broadPhaseLayerFilterProcs = .();
+			broadPhaseLayerFilterProcs.ShouldCollide = => BroadPhaseShouldCollide;
+			JPH.JPH_BroadPhaseLayerFilter_SetProcs(&broadPhaseLayerFilterProcs);
+			broadPhaseLayerFilter = JPH.JPH_BroadPhaseLayerFilter_Create(null);
 
 			objectLayerPairFilter = JPH.JPH_ObjectLayerPairFilterTable_Create(2);
 			JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilter, LayerNonMoving, LayerMoving);
@@ -117,6 +138,7 @@ namespace example
 		static void CleanupPhysics(bool interactive)
 		{
 			JPH.JPH_PhysicsSystem_Destroy(physicsSystem);
+			JPH.JPH_BroadPhaseLayerFilter_Destroy(broadPhaseLayerFilter);
 			JPH.JPH_JobSystem_Destroy(jobSystem);
 			JPH.JPH_Shutdown();
 		}
@@ -128,6 +150,8 @@ namespace example
 
 			for (int i = 0; i < frameCount; i++)
 				StepPhysics(false);
+
+			RunBroadPhaseFilterQuery();
 
 			RVec3 position = default;
 			JPH.JPH_BodyInterface_GetPosition(bodyInterface, dynamicBody, &position);
