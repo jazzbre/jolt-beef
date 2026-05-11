@@ -1,0 +1,45 @@
+FileVersion = 1
+
+[Project]
+Name = "jolt-beef"
+TargetType = "BeefLib"
+
+[Configs.Debug.Win64]
+LibPaths = ["$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Debug\\Joltd.lib", "$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Debug\\joltcd.lib"]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Release.Win64]
+LibPaths = ["$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\Jolt.lib", "$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\joltc.lib"]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Paranoid.Win64]
+LibPaths = ["$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\Jolt.lib", "$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\joltc.lib"]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Test.Win64]
+LibPaths = ["$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\Jolt.lib", "$(ProjectDir)\\submodules\\joltc\\build\\vs2022_x64\\lib\\Release\\joltc.lib"]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Debug.macOS]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Release.macOS]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Paranoid.macOS]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Test.macOS]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Debug.Linux64]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Release.Linux64]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Paranoid.Linux64]
+OtherLinkFlags = "$(LinkFlags)"
+
+[Configs.Test.Linux64]
+OtherLinkFlags = "$(LinkFlags)"
