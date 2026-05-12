@@ -5244,13 +5244,889 @@ public static class Physics
 	}
 }
 
+public struct PhysicsWorldConfig
+{
+	public uint32 MaxBodies = 65536;
+	public uint32 NumBodyMutexes = 0;
+	public uint32 MaxBodyPairs = 65536;
+	public uint32 MaxContactConstraints = 10240;
+	public uint32 ObjectLayerCount = 2;
+	public uint32 BroadPhaseLayerCount = 2;
+	public Vec3 Gravity = .(0.0f, -9.81f, 0.0f);
+}
+
+public struct JobSystemHandle
+{
+	public JobSystem* Handle;
+
+	public this(JobSystemThreadPoolConfig* config = null)
+	{
+		Handle = JPH.JPH_JobSystemThreadPool_Create(config);
+	}
+
+	public void Destroy() mut
+	{
+		if (Handle != null)
+		{
+			JPH.JPH_JobSystem_Destroy(Handle);
+			Handle = null;
+		}
+	}
+}
+
+public struct ShapeRef
+{
+	public Shape* Handle;
+	public bool OwnsHandle;
+
+	public this(Shape* handle)
+	{
+		Handle = handle;
+		OwnsHandle = true;
+	}
+
+	private this(Shape* handle, bool ownsHandle)
+	{
+		Handle = handle;
+		OwnsHandle = ownsHandle;
+	}
+
+	public static ShapeRef Borrowed(Shape* handle)
+	{
+		return .(handle, false);
+	}
+
+	public static ShapeRef Sphere(float radius)
+	{
+		return .((Shape*)JPH.JPH_SphereShape_Create(radius));
+	}
+
+	public static ShapeRef Box(Vec3 halfExtent, float convexRadius = JPH.DefaultConvexRadius)
+	{
+		Vec3 halfExtentCopy = halfExtent;
+		return .((Shape*)JPH.JPH_BoxShape_Create(&halfExtentCopy, convexRadius));
+	}
+
+	public static ShapeRef Plane(Plane plane, float halfExtent, PhysicsMaterial* material = null)
+	{
+		Plane planeCopy = plane;
+		return .((Shape*)JPH.JPH_PlaneShape_Create(&planeCopy, material, halfExtent));
+	}
+
+	public static ShapeRef Triangle(Vec3 v1, Vec3 v2, Vec3 v3, float convexRadius = JPH.DefaultConvexRadius)
+	{
+		Vec3 v1Copy = v1;
+		Vec3 v2Copy = v2;
+		Vec3 v3Copy = v3;
+		return .((Shape*)JPH.JPH_TriangleShape_Create(&v1Copy, &v2Copy, &v3Copy, convexRadius));
+	}
+
+	public static ShapeRef Capsule(float halfHeightOfCylinder, float radius)
+	{
+		return .((Shape*)JPH.JPH_CapsuleShape_Create(halfHeightOfCylinder, radius));
+	}
+
+	public static ShapeRef TaperedCapsule(float halfHeightOfTaperedCylinder, float topRadius, float bottomRadius)
+	{
+		TaperedCapsuleShapeSettings* settings = JPH.JPH_TaperedCapsuleShapeSettings_Create(halfHeightOfTaperedCylinder, topRadius, bottomRadius);
+		TaperedCapsuleShape* shape = JPH.JPH_TaperedCapsuleShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef Cylinder(float halfHeight, float radius)
+	{
+		return .((Shape*)JPH.JPH_CylinderShape_Create(halfHeight, radius));
+	}
+
+	public static ShapeRef Cylinder(float halfHeight, float radius, float convexRadius)
+	{
+		CylinderShapeSettings* settings = JPH.JPH_CylinderShapeSettings_Create(halfHeight, radius, convexRadius);
+		CylinderShape* shape = JPH.JPH_CylinderShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef TaperedCylinder(float halfHeightOfTaperedCylinder, float topRadius, float bottomRadius, float convexRadius = JPH.DefaultConvexRadius, PhysicsMaterial* material = null)
+	{
+		TaperedCylinderShapeSettings* settings = JPH.JPH_TaperedCylinderShapeSettings_Create(halfHeightOfTaperedCylinder, topRadius, bottomRadius, convexRadius, material);
+		TaperedCylinderShape* shape = JPH.JPH_TaperedCylinderShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef ConvexHull(Vec3* points, uint32 pointCount, float maxConvexRadius = JPH.DefaultConvexRadius)
+	{
+		ConvexHullShapeSettings* settings = JPH.JPH_ConvexHullShapeSettings_Create(points, pointCount, maxConvexRadius);
+		ConvexHullShape* shape = JPH.JPH_ConvexHullShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef Mesh(Triangle* triangles, uint32 triangleCount, uint32 maxTrianglesPerLeaf = 0, Mesh_Shape_BuildQuality buildQuality = .FavorRuntimePerformance)
+	{
+		MeshShapeSettings* settings = JPH.JPH_MeshShapeSettings_Create(triangles, triangleCount);
+		if (maxTrianglesPerLeaf != 0)
+			JPH.JPH_MeshShapeSettings_SetMaxTrianglesPerLeaf(settings, maxTrianglesPerLeaf);
+		JPH.JPH_MeshShapeSettings_SetBuildQuality(settings, buildQuality);
+		JPH.JPH_MeshShapeSettings_Sanitize(settings);
+		MeshShape* shape = JPH.JPH_MeshShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef Mesh(Vec3* vertices, uint32 vertexCount, IndexedTriangle* triangles, uint32 triangleCount, uint32 maxTrianglesPerLeaf = 0, Mesh_Shape_BuildQuality buildQuality = .FavorRuntimePerformance, bool perTriangleUserData = false)
+	{
+		MeshShapeSettings* settings = JPH.JPH_MeshShapeSettings_Create2(vertices, vertexCount, triangles, triangleCount);
+		if (maxTrianglesPerLeaf != 0)
+			JPH.JPH_MeshShapeSettings_SetMaxTrianglesPerLeaf(settings, maxTrianglesPerLeaf);
+		JPH.JPH_MeshShapeSettings_SetBuildQuality(settings, buildQuality);
+		JPH.JPH_MeshShapeSettings_SetPerTriangleUserData(settings, perTriangleUserData);
+		JPH.JPH_MeshShapeSettings_Sanitize(settings);
+		MeshShape* shape = JPH.JPH_MeshShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef HeightField(float* samples, uint32 sampleCount, Vec3 offset, Vec3 scale, uint8* materialIndices = null)
+	{
+		Vec3 offsetCopy = offset;
+		Vec3 scaleCopy = scale;
+		HeightFieldShapeSettings* settings = JPH.JPH_HeightFieldShapeSettings_Create(samples, &offsetCopy, &scaleCopy, sampleCount, materialIndices);
+		HeightFieldShape* shape = JPH.JPH_HeightFieldShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public static ShapeRef RotatedTranslated(Vec3 position, Quat rotation, ShapeRef shape)
+	{
+		Vec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		return .((Shape*)JPH.JPH_RotatedTranslatedShape_Create(&positionCopy, &rotationCopy, shape.Handle));
+	}
+
+	public static ShapeRef Scaled(ShapeRef shape, Vec3 scale)
+	{
+		Vec3 scaleCopy = scale;
+		return .((Shape*)JPH.JPH_ScaledShape_Create(shape.Handle, &scaleCopy));
+	}
+
+	public static ShapeRef OffsetCenterOfMass(Vec3 offset, ShapeRef shape)
+	{
+		Vec3 offsetCopy = offset;
+		return .((Shape*)JPH.JPH_OffsetCenterOfMassShape_Create(&offsetCopy, shape.Handle));
+	}
+
+	public static ShapeRef Empty(Vec3 centerOfMass)
+	{
+		Vec3 centerOfMassCopy = centerOfMass;
+		EmptyShapeSettings* settings = JPH.JPH_EmptyShapeSettings_Create(&centerOfMassCopy);
+		EmptyShape* shape = JPH.JPH_EmptyShapeSettings_CreateShape(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .((Shape*)shape);
+	}
+
+	public void Destroy() mut
+	{
+		if ((Handle != null) && OwnsHandle)
+		{
+			JPH.JPH_Shape_Destroy(Handle);
+			Handle = null;
+		}
+
+		Handle = null;
+		OwnsHandle = false;
+	}
+}
+
+public struct CompoundShapeBuilder
+{
+	public CompoundShapeSettings* Settings;
+
+	public static CompoundShapeBuilder Static()
+	{
+		return .((CompoundShapeSettings*)JPH.JPH_StaticCompoundShapeSettings_Create());
+	}
+
+	public static CompoundShapeBuilder Mutable()
+	{
+		return .((CompoundShapeSettings*)JPH.JPH_MutableCompoundShapeSettings_Create());
+	}
+
+	private this(CompoundShapeSettings* settings)
+	{
+		Settings = settings;
+	}
+
+	public void Add(ShapeRef shape, Vec3 position, Quat rotation = .Identity, uint32 userData = 0)
+	{
+		Vec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		JPH.JPH_CompoundShapeSettings_AddShape2(Settings, &positionCopy, &rotationCopy, shape.Handle, userData);
+	}
+
+	public ShapeRef CreateStatic()
+	{
+		return .((Shape*)JPH.JPH_StaticCompoundShape_Create((StaticCompoundShapeSettings*)Settings));
+	}
+
+	public ShapeRef CreateMutable()
+	{
+		return .((Shape*)JPH.JPH_MutableCompoundShape_Create((MutableCompoundShapeSettings*)Settings));
+	}
+
+	public void Destroy() mut
+	{
+		if (Settings != null)
+		{
+			JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)Settings);
+			Settings = null;
+		}
+	}
+}
+
+public struct MutableCompoundRef
+{
+	public ShapeRef Shape;
+	public MutableCompoundShape* Handle;
+	private Vec3 mPreviousCenterOfMass;
+	private bool mHasPreviousCenterOfMass;
+
+	public static MutableCompoundRef Create()
+	{
+		MutableCompoundShapeSettings* settings = JPH.JPH_MutableCompoundShapeSettings_Create();
+		MutableCompoundShape* shape = JPH.JPH_MutableCompoundShape_Create(settings);
+		JPH.JPH_ShapeSettings_Destroy((ShapeSettings*)settings);
+		return .(.((Shape*)shape), shape);
+	}
+
+	private this(ShapeRef shape, MutableCompoundShape* handle)
+	{
+		Shape = shape;
+		Handle = handle;
+		mPreviousCenterOfMass = default;
+		mHasPreviousCenterOfMass = false;
+	}
+
+	public void BeginEdit() mut
+	{
+		JPH.JPH_Shape_GetCenterOfMass(Shape.Handle, &mPreviousCenterOfMass);
+		mHasPreviousCenterOfMass = true;
+	}
+
+	private void EnsureEditStarted() mut
+	{
+		if (!mHasPreviousCenterOfMass)
+			BeginEdit();
+	}
+
+	public uint32 Add(ShapeRef child, Vec3 position, Quat rotation = .Identity, uint32 userData = 0, uint32 index = 0xFFFFFFFF) mut
+	{
+		EnsureEditStarted();
+		Vec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		return JPH.JPH_MutableCompoundShape_AddShape(Handle, &positionCopy, &rotationCopy, child.Handle, userData, index);
+	}
+
+	public void Remove(uint32 index) mut
+	{
+		EnsureEditStarted();
+		JPH.JPH_MutableCompoundShape_RemoveShape(Handle, index);
+	}
+
+	public void Move(uint32 index, Vec3 position, Quat rotation = .Identity) mut
+	{
+		EnsureEditStarted();
+		Vec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		JPH.JPH_MutableCompoundShape_ModifyShape(Handle, index, &positionCopy, &rotationCopy);
+	}
+
+	public void Replace(uint32 index, ShapeRef newShape, Vec3 position, Quat rotation = .Identity) mut
+	{
+		EnsureEditStarted();
+		Vec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		JPH.JPH_MutableCompoundShape_ModifyShape2(Handle, index, &positionCopy, &rotationCopy, newShape.Handle);
+	}
+
+	public void AdjustCenterOfMass() mut
+	{
+		EnsureEditStarted();
+		JPH.JPH_MutableCompoundShape_AdjustCenterOfMass(Handle);
+	}
+
+	public void NotifyChanged(BodyHandle body, bool updateMassProperties = true, Activation activation = .Activate) mut
+	{
+		if (!mHasPreviousCenterOfMass)
+			BeginEdit();
+
+		Vec3 previousCenterOfMass = mPreviousCenterOfMass;
+		JPH.JPH_BodyInterface_NotifyShapeChanged(body.BodyInterface, body.ID, &previousCenterOfMass, updateMassProperties, activation);
+		mHasPreviousCenterOfMass = false;
+	}
+
+	public void Destroy() mut
+	{
+		Shape.Destroy();
+		Handle = null;
+		mHasPreviousCenterOfMass = false;
+	}
+}
+
+public struct VoxelCoord
+{
+	public int32 X;
+	public int32 Y;
+	public int32 Z;
+
+	public this(int32 x, int32 y, int32 z)
+	{
+		X = x;
+		Y = y;
+		Z = z;
+	}
+}
+
+public struct VoxelCompound
+{
+	public MutableCompoundRef Compound;
+	public ShapeRef VoxelShape;
+	public float VoxelSize;
+
+	public static VoxelCompound Create(float voxelSize = 1.0f, float convexRadius = JPH.DefaultConvexRadius)
+	{
+		float halfExtent = voxelSize * 0.5f;
+		return .(.Create(), .Box(.(halfExtent, halfExtent, halfExtent), convexRadius), voxelSize);
+	}
+
+	private this(MutableCompoundRef compound, ShapeRef voxelShape, float voxelSize)
+	{
+		Compound = compound;
+		VoxelShape = voxelShape;
+		VoxelSize = voxelSize;
+	}
+
+	public Shape* ShapeHandle => Compound.Shape.Handle;
+
+	public Vec3 CenterOf(VoxelCoord coord)
+	{
+		return .((float)coord.X * VoxelSize, (float)coord.Y * VoxelSize, (float)coord.Z * VoxelSize);
+	}
+
+	public void BeginEdit() mut
+	{
+		Compound.BeginEdit();
+	}
+
+	public uint32 Add(VoxelCoord coord, uint32 userData = 0, uint32 index = 0xFFFFFFFF) mut
+	{
+		return Compound.Add(VoxelShape, CenterOf(coord), .Identity, userData, index);
+	}
+
+	public void Remove(uint32 index) mut
+	{
+		Compound.Remove(index);
+	}
+
+	public void Move(uint32 index, VoxelCoord coord) mut
+	{
+		Compound.Move(index, CenterOf(coord), .Identity);
+	}
+
+	public void AdjustCenterOfMass() mut
+	{
+		Compound.AdjustCenterOfMass();
+	}
+
+	public void NotifyChanged(BodyHandle body, bool updateMassProperties = true, Activation activation = .Activate) mut
+	{
+		Compound.NotifyChanged(body, updateMassProperties, activation);
+	}
+
+	public BodyHandle CreateBody(PhysicsWorld* world, RVec3 position, MotionType motionType, ObjectLayer objectLayer, Activation activation = .Activate, Quat rotation = .Identity)
+	{
+		return world.CreateBody(Compound.Shape, position, motionType, objectLayer, activation, rotation);
+	}
+
+	public void Destroy() mut
+	{
+		Compound.Destroy();
+		VoxelShape.Destroy();
+	}
+}
+
+public struct BodyHandle
+{
+	public BodyInterface* BodyInterface;
+	public BodyID ID;
+
+	public this(BodyInterface* bodyInterface, BodyID id)
+	{
+		BodyInterface = bodyInterface;
+		ID = id;
+	}
+
+	public RVec3 Position
+	{
+		get
+		{
+			RVec3 result = default;
+			JPH.JPH_BodyInterface_GetPosition(BodyInterface, ID, &result);
+			return result;
+		}
+
+		set
+		{
+			RVec3 valueCopy = value;
+			JPH.JPH_BodyInterface_SetPosition(BodyInterface, ID, &valueCopy, .Activate);
+		}
+	}
+
+	public Quat Rotation
+	{
+		get
+		{
+			Quat result = default;
+			JPH.JPH_BodyInterface_GetRotation(BodyInterface, ID, &result);
+			return result;
+		}
+
+		set
+		{
+			Quat valueCopy = value;
+			JPH.JPH_BodyInterface_SetRotation(BodyInterface, ID, &valueCopy, .Activate);
+		}
+	}
+
+	public Vec3 LinearVelocity
+	{
+		get
+		{
+			Vec3 result = default;
+			JPH.JPH_BodyInterface_GetLinearVelocity(BodyInterface, ID, &result);
+			return result;
+		}
+
+		set
+		{
+			Vec3 valueCopy = value;
+			JPH.JPH_BodyInterface_SetLinearVelocity(BodyInterface, ID, &valueCopy);
+		}
+	}
+
+	public Vec3 AngularVelocity
+	{
+		get
+		{
+			Vec3 result = default;
+			JPH.JPH_BodyInterface_GetAngularVelocity(BodyInterface, ID, &result);
+			return result;
+		}
+
+		set
+		{
+			Vec3 valueCopy = value;
+			JPH.JPH_BodyInterface_SetAngularVelocity(BodyInterface, ID, &valueCopy);
+		}
+	}
+
+	public RVec3 CenterOfMassPosition
+	{
+		get
+		{
+			RVec3 result = default;
+			JPH.JPH_BodyInterface_GetCenterOfMassPosition(BodyInterface, ID, &result);
+			return result;
+		}
+	}
+
+	public MotionType MotionType
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetMotionType(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetMotionType(BodyInterface, ID, value, .Activate);
+		}
+	}
+
+	public MotionQuality MotionQuality
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetMotionQuality(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetMotionQuality(BodyInterface, ID, value);
+		}
+	}
+
+	public float Restitution
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetRestitution(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetRestitution(BodyInterface, ID, value);
+		}
+	}
+
+	public float Friction
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetFriction(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetFriction(BodyInterface, ID, value);
+		}
+	}
+
+	public float GravityFactor
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetGravityFactor(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetGravityFactor(BodyInterface, ID, value);
+		}
+	}
+
+	public ObjectLayer ObjectLayer
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetObjectLayer(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetObjectLayer(BodyInterface, ID, value);
+		}
+	}
+
+	public uint64 UserData
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_GetUserData(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetUserData(BodyInterface, ID, value);
+		}
+	}
+
+	public bool IsSensor
+	{
+		get
+		{
+			return JPH.JPH_BodyInterface_IsSensor(BodyInterface, ID);
+		}
+
+		set
+		{
+			JPH.JPH_BodyInterface_SetIsSensor(BodyInterface, ID, value);
+		}
+	}
+
+	public bool IsActive => JPH.JPH_BodyInterface_IsActive(BodyInterface, ID);
+	public bool IsAdded => JPH.JPH_BodyInterface_IsAdded(BodyInterface, ID);
+	public BodyType BodyType => JPH.JPH_BodyInterface_GetBodyType(BodyInterface, ID);
+	public Shape* ShapeHandle => JPH.JPH_BodyInterface_GetShape(BodyInterface, ID);
+
+	public void SetPosition(RVec3 position, Activation activation = .Activate)
+	{
+		RVec3 positionCopy = position;
+		JPH.JPH_BodyInterface_SetPosition(BodyInterface, ID, &positionCopy, activation);
+	}
+
+	public void SetRotation(Quat rotation, Activation activation = .Activate)
+	{
+		Quat rotationCopy = rotation;
+		JPH.JPH_BodyInterface_SetRotation(BodyInterface, ID, &rotationCopy, activation);
+	}
+
+	public void SetPositionAndRotation(RVec3 position, Quat rotation, Activation activation = .Activate)
+	{
+		RVec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		JPH.JPH_BodyInterface_SetPositionAndRotation(BodyInterface, ID, &positionCopy, &rotationCopy, activation);
+	}
+
+	public void SetPositionAndRotationWhenChanged(RVec3 position, Quat rotation, Activation activation = .Activate)
+	{
+		RVec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		JPH.JPH_BodyInterface_SetPositionAndRotationWhenChanged(BodyInterface, ID, &positionCopy, &rotationCopy, activation);
+	}
+
+	public void GetPositionAndRotation(out RVec3 position, out Quat rotation)
+	{
+		position = default;
+		rotation = default;
+		JPH.JPH_BodyInterface_GetPositionAndRotation(BodyInterface, ID, &position, &rotation);
+	}
+
+	public void SetPositionRotationAndVelocity(RVec3 position, Quat rotation, Vec3 linearVelocity, Vec3 angularVelocity)
+	{
+		RVec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		Vec3 linearVelocityCopy = linearVelocity;
+		Vec3 angularVelocityCopy = angularVelocity;
+		JPH.JPH_BodyInterface_SetPositionRotationAndVelocity(BodyInterface, ID, &positionCopy, &rotationCopy, &linearVelocityCopy, &angularVelocityCopy);
+	}
+
+	public void SetLinearAndAngularVelocity(Vec3 linearVelocity, Vec3 angularVelocity)
+	{
+		Vec3 linearVelocityCopy = linearVelocity;
+		Vec3 angularVelocityCopy = angularVelocity;
+		JPH.JPH_BodyInterface_SetLinearAndAngularVelocity(BodyInterface, ID, &linearVelocityCopy, &angularVelocityCopy);
+	}
+
+	public void GetLinearAndAngularVelocity(out Vec3 linearVelocity, out Vec3 angularVelocity)
+	{
+		linearVelocity = default;
+		angularVelocity = default;
+		JPH.JPH_BodyInterface_GetLinearAndAngularVelocity(BodyInterface, ID, &linearVelocity, &angularVelocity);
+	}
+
+	public void AddLinearVelocity(Vec3 linearVelocity)
+	{
+		Vec3 linearVelocityCopy = linearVelocity;
+		JPH.JPH_BodyInterface_AddLinearVelocity(BodyInterface, ID, &linearVelocityCopy);
+	}
+
+	public void AddLinearAndAngularVelocity(Vec3 linearVelocity, Vec3 angularVelocity)
+	{
+		Vec3 linearVelocityCopy = linearVelocity;
+		Vec3 angularVelocityCopy = angularVelocity;
+		JPH.JPH_BodyInterface_AddLinearAndAngularVelocity(BodyInterface, ID, &linearVelocityCopy, &angularVelocityCopy);
+	}
+
+	public Vec3 GetPointVelocity(RVec3 point)
+	{
+		RVec3 pointCopy = point;
+		Vec3 result = default;
+		JPH.JPH_BodyInterface_GetPointVelocity(BodyInterface, ID, &pointCopy, &result);
+		return result;
+	}
+
+	public void AddForce(Vec3 force)
+	{
+		Vec3 forceCopy = force;
+		JPH.JPH_BodyInterface_AddForce(BodyInterface, ID, &forceCopy);
+	}
+
+	public void AddForce(Vec3 force, RVec3 point)
+	{
+		Vec3 forceCopy = force;
+		RVec3 pointCopy = point;
+		JPH.JPH_BodyInterface_AddForce2(BodyInterface, ID, &forceCopy, &pointCopy);
+	}
+
+	public void AddTorque(Vec3 torque)
+	{
+		Vec3 torqueCopy = torque;
+		JPH.JPH_BodyInterface_AddTorque(BodyInterface, ID, &torqueCopy);
+	}
+
+	public void AddForceAndTorque(Vec3 force, Vec3 torque)
+	{
+		Vec3 forceCopy = force;
+		Vec3 torqueCopy = torque;
+		JPH.JPH_BodyInterface_AddForceAndTorque(BodyInterface, ID, &forceCopy, &torqueCopy);
+	}
+
+	public void AddImpulse(Vec3 impulse)
+	{
+		Vec3 impulseCopy = impulse;
+		JPH.JPH_BodyInterface_AddImpulse(BodyInterface, ID, &impulseCopy);
+	}
+
+	public void AddImpulse(Vec3 impulse, RVec3 point)
+	{
+		Vec3 impulseCopy = impulse;
+		RVec3 pointCopy = point;
+		JPH.JPH_BodyInterface_AddImpulse2(BodyInterface, ID, &impulseCopy, &pointCopy);
+	}
+
+	public void AddAngularImpulse(Vec3 angularImpulse)
+	{
+		Vec3 angularImpulseCopy = angularImpulse;
+		JPH.JPH_BodyInterface_AddAngularImpulse(BodyInterface, ID, &angularImpulseCopy);
+	}
+
+	public void MoveKinematic(RVec3 targetPosition, Quat targetRotation, float deltaTime)
+	{
+		RVec3 targetPositionCopy = targetPosition;
+		Quat targetRotationCopy = targetRotation;
+		JPH.JPH_BodyInterface_MoveKinematic(BodyInterface, ID, &targetPositionCopy, &targetRotationCopy, deltaTime);
+	}
+
+	public bool ApplyBuoyancyImpulse(RVec3 surfacePosition, Vec3 surfaceNormal, float buoyancy, float linearDrag, float angularDrag, Vec3 fluidVelocity, Vec3 gravity, float deltaTime)
+	{
+		RVec3 surfacePositionCopy = surfacePosition;
+		Vec3 surfaceNormalCopy = surfaceNormal;
+		Vec3 fluidVelocityCopy = fluidVelocity;
+		Vec3 gravityCopy = gravity;
+		return JPH.JPH_BodyInterface_ApplyBuoyancyImpulse(BodyInterface, ID, &surfacePositionCopy, &surfaceNormalCopy, buoyancy, linearDrag, angularDrag, &fluidVelocityCopy, &gravityCopy, deltaTime);
+	}
+
+	public RMat4 GetWorldTransform()
+	{
+		RMat4 result = default;
+		JPH.JPH_BodyInterface_GetWorldTransform(BodyInterface, ID, &result);
+		return result;
+	}
+
+	public RMat4 GetCenterOfMassTransform()
+	{
+		RMat4 result = default;
+		JPH.JPH_BodyInterface_GetCenterOfMassTransform(BodyInterface, ID, &result);
+		return result;
+	}
+
+	public Mat4 GetInverseInertia()
+	{
+		Mat4 result = default;
+		JPH.JPH_BodyInterface_GetInverseInertia(BodyInterface, ID, &result);
+		return result;
+	}
+
+	public void SetMotionType(MotionType motionType, Activation activation = .Activate)
+	{
+		JPH.JPH_BodyInterface_SetMotionType(BodyInterface, ID, motionType, activation);
+	}
+
+	public void Activate()
+	{
+		JPH.JPH_BodyInterface_ActivateBody(BodyInterface, ID);
+	}
+
+	public void SetShape(ShapeRef shape, bool updateMassProperties = true, Activation activation = .Activate)
+	{
+		JPH.JPH_BodyInterface_SetShape(BodyInterface, ID, shape.Handle, updateMassProperties, activation);
+	}
+
+	public void NotifyShapeChanged(Vec3 previousCenterOfMass, bool updateMassProperties = true, Activation activation = .Activate)
+	{
+		Vec3 previousCenterOfMassCopy = previousCenterOfMass;
+		JPH.JPH_BodyInterface_NotifyShapeChanged(BodyInterface, ID, &previousCenterOfMassCopy, updateMassProperties, activation);
+	}
+
+	public void Deactivate()
+	{
+		JPH.JPH_BodyInterface_DeactivateBody(BodyInterface, ID);
+	}
+
+	public void ResetSleepTimer()
+	{
+		JPH.JPH_BodyInterface_ResetSleepTimer(BodyInterface, ID);
+	}
+
+	public void InvalidateContactCache()
+	{
+		JPH.JPH_BodyInterface_InvalidateContactCache(BodyInterface, ID);
+	}
+
+	public void Remove()
+	{
+		JPH.JPH_BodyInterface_RemoveBody(BodyInterface, ID);
+	}
+
+	public void Destroy()
+	{
+		JPH.JPH_BodyInterface_RemoveAndDestroyBody(BodyInterface, ID);
+	}
+}
+
+public struct BroadPhaseFilter
+{
+	public BroadPhaseLayerFilter_Procs Procs;
+	public BroadPhaseLayerFilter* Handle;
+
+	public this(BroadPhaseLayerFilter_Procs.ShouldCollideFunction shouldCollide, void* userData = null)
+	{
+		Procs = .();
+		Procs.ShouldCollide = shouldCollide;
+		JPH.JPH_BroadPhaseLayerFilter_SetProcs(&Procs);
+		Handle = JPH.JPH_BroadPhaseLayerFilter_Create(userData);
+	}
+
+	public void Destroy() mut
+	{
+		if (Handle != null)
+		{
+			JPH.JPH_BroadPhaseLayerFilter_Destroy(Handle);
+			Handle = null;
+		}
+	}
+}
+
 public struct PhysicsWorld
 {
 	public PhysicsSystem* Handle;
+	public JobSystemHandle JobSystem;
+	public BroadPhaseLayerInterface* BroadPhaseLayerInterface;
+	public ObjectLayerPairFilter* ObjectLayerPairFilter;
+	public ObjectVsBroadPhaseLayerFilter* ObjectVsBroadPhaseLayerFilter;
+	public BodyInterface* BodyInterface;
+	public uint32 ObjectLayerCount;
+	public uint32 BroadPhaseLayerCount;
 
-	public this(PhysicsSystemSettings* settings)
+	public this(PhysicsWorldConfig config = .())
 	{
-		Handle = JPH.JPH_PhysicsSystem_Create(settings);
+		Handle = null;
+		JobSystem = .();
+		BroadPhaseLayerInterface = JPH.JPH_BroadPhaseLayerInterfaceTable_Create(config.ObjectLayerCount, config.BroadPhaseLayerCount);
+		ObjectLayerPairFilter = JPH.JPH_ObjectLayerPairFilterTable_Create(config.ObjectLayerCount);
+		BodyInterface = null;
+		ObjectLayerCount = config.ObjectLayerCount;
+		BroadPhaseLayerCount = config.BroadPhaseLayerCount;
+
+		for (uint32 objectLayer = 0; objectLayer < ObjectLayerCount; objectLayer++)
+		{
+			BroadPhaseLayer broadPhaseLayer = (BroadPhaseLayer)(objectLayer < BroadPhaseLayerCount ? objectLayer : 0);
+			JPH.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(BroadPhaseLayerInterface, objectLayer, broadPhaseLayer);
+
+			for (uint32 otherLayer = objectLayer; otherLayer < ObjectLayerCount; otherLayer++)
+				JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(ObjectLayerPairFilter, objectLayer, otherLayer);
+		}
+
+		ObjectVsBroadPhaseLayerFilter = JPH.JPH_ObjectVsBroadPhaseLayerFilterTable_Create(
+			BroadPhaseLayerInterface,
+			BroadPhaseLayerCount,
+			ObjectLayerPairFilter,
+			ObjectLayerCount);
+
+		PhysicsSystemSettings settings = .();
+		settings.MaxBodies = config.MaxBodies;
+		settings.NumBodyMutexes = config.NumBodyMutexes;
+		settings.MaxBodyPairs = config.MaxBodyPairs;
+		settings.MaxContactConstraints = config.MaxContactConstraints;
+		settings.BroadPhaseLayerInterface = BroadPhaseLayerInterface;
+		settings.ObjectLayerPairFilter = ObjectLayerPairFilter;
+		settings.ObjectVsBroadPhaseLayerFilter = ObjectVsBroadPhaseLayerFilter;
+
+		Handle = JPH.JPH_PhysicsSystem_Create(&settings);
+		BodyInterface = JPH.JPH_PhysicsSystem_GetBodyInterface(Handle);
+		Gravity = config.Gravity;
 	}
 
 	public void Destroy() mut
@@ -5259,11 +6135,14 @@ public struct PhysicsWorld
 		{
 			JPH.JPH_PhysicsSystem_Destroy(Handle);
 			Handle = null;
+			BroadPhaseLayerInterface = null;
+			ObjectLayerPairFilter = null;
+			ObjectVsBroadPhaseLayerFilter = null;
+			BodyInterface = null;
 		}
-	}
 
-	public BodyInterface* BodyInterface => JPH.JPH_PhysicsSystem_GetBodyInterface(Handle);
-	public BodyInterface* BodyInterfaceNoLock => JPH.JPH_PhysicsSystem_GetBodyInterfaceNoLock(Handle);
+		JobSystem.Destroy();
+	}
 
 	public Vec3 Gravity
 	{
@@ -5281,14 +6160,43 @@ public struct PhysicsWorld
 		}
 	}
 
-	public PhysicsUpdateError Update(float deltaTime, int32 collisionSteps, JobSystem* jobSystem)
+	public void MapLayer(ObjectLayer objectLayer, BroadPhaseLayer broadPhaseLayer)
 	{
-		return JPH.JPH_PhysicsSystem_Update(Handle, deltaTime, collisionSteps, jobSystem);
+		JPH.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(BroadPhaseLayerInterface, objectLayer, broadPhaseLayer);
+	}
+
+	public void EnableCollision(ObjectLayer layer1, ObjectLayer layer2)
+	{
+		JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(ObjectLayerPairFilter, layer1, layer2);
+	}
+
+	public BodyHandle CreateBody(ShapeRef shape, RVec3 position, MotionType motionType, ObjectLayer objectLayer, Activation activation = .Activate, Quat rotation = .Identity)
+	{
+		RVec3 positionCopy = position;
+		Quat rotationCopy = rotation;
+		BodyCreationSettings* settings = JPH.JPH_BodyCreationSettings_Create3(shape.Handle, &positionCopy, &rotationCopy, motionType, objectLayer);
+		BodyID bodyID = JPH.JPH_BodyInterface_CreateAndAddBody(BodyInterface, settings, activation);
+		JPH.JPH_BodyCreationSettings_Destroy(settings);
+		return .(BodyInterface, bodyID);
+	}
+
+	public PhysicsUpdateError Step(float deltaTime, int32 collisionSteps = 1)
+	{
+		return JPH.JPH_PhysicsSystem_Update(Handle, deltaTime, collisionSteps, JobSystem.Handle);
 	}
 
 	public void OptimizeBroadPhase()
 	{
 		JPH.JPH_PhysicsSystem_OptimizeBroadPhase(Handle);
+	}
+
+	public bool CastRay(RVec3 origin, Vec3 direction, ref RayCastResult hit, BroadPhaseFilter* broadPhaseFilter = null, ObjectLayerFilter* objectLayerFilter = null, BodyFilter* bodyFilter = null)
+	{
+		RVec3 originCopy = origin;
+		Vec3 directionCopy = direction;
+		BroadPhaseLayerFilter* filter = broadPhaseFilter != null ? broadPhaseFilter.Handle : null;
+		NarrowPhaseQuery* query = JPH.JPH_PhysicsSystem_GetNarrowPhaseQueryNoLock(Handle);
+		return JPH.JPH_NarrowPhaseQuery_CastRay(query, &originCopy, &directionCopy, &hit, filter, objectLayerFilter, bodyFilter);
 	}
 }
 
@@ -5317,23 +6225,22 @@ public static class Shapes
 {
 	public static Shape* Sphere(float radius)
 	{
-		return (Shape*)JPH.JPH_SphereShape_Create(radius);
+		return ShapeRef.Sphere(radius).Handle;
 	}
 
 	public static Shape* Box(Vec3 halfExtent, float convexRadius = JPH.DefaultConvexRadius)
 	{
-		Vec3 halfExtentCopy = halfExtent;
-		return (Shape*)JPH.JPH_BoxShape_Create(&halfExtentCopy, convexRadius);
+		return ShapeRef.Box(halfExtent, convexRadius).Handle;
 	}
 
 	public static Shape* Capsule(float halfHeightOfCylinder, float radius)
 	{
-		return (Shape*)JPH.JPH_CapsuleShape_Create(halfHeightOfCylinder, radius);
+		return ShapeRef.Capsule(halfHeightOfCylinder, radius).Handle;
 	}
 
 	public static Shape* Cylinder(float halfHeight, float radius)
 	{
-		return (Shape*)JPH.JPH_CylinderShape_Create(halfHeight, radius);
+		return ShapeRef.Cylinder(halfHeight, radius).Handle;
 	}
 
 	public static void Release(Shape* shape)
@@ -5342,3 +6249,4 @@ public static class Shapes
 			JPH.JPH_Shape_Destroy(shape);
 	}
 }
+

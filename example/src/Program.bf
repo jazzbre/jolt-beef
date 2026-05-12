@@ -10,34 +10,20 @@ namespace example
 		const BroadPhaseLayer BroadPhaseNonMoving = 0;
 		const BroadPhaseLayer BroadPhaseMoving = 1;
 
-		static JobSystem* jobSystem;
-		static BroadPhaseLayerInterface* broadPhaseLayerInterface;
-		static ObjectLayerPairFilter* objectLayerPairFilter;
-		static ObjectVsBroadPhaseLayerFilter* objectVsBroadPhaseLayerFilter;
-		static BroadPhaseLayerFilter_Procs broadPhaseLayerFilterProcs;
-		static BroadPhaseLayerFilter* broadPhaseLayerFilter;
-		static PhysicsSystem* physicsSystem;
-		static BodyInterface* bodyInterface;
-		static BodyID dynamicBody;
+		static PhysicsWorld world;
+		static BroadPhaseFilter broadPhaseFilter;
+		static VoxelCompound voxelTerrain;
+		static BodyHandle voxelBody;
+		static BodyHandle dynamicBody;
 
 		static bool BroadPhaseShouldCollide(void* userData, BroadPhaseLayer layer)
 		{
 			return true;
 		}
 
-		static BodyID CreateBody(Shape* shape, RVec3 position, MotionType motionType, ObjectLayer objectLayer, Activation activation = .Activate)
-		{
-			Quat rotation = .Identity;
-			RVec3 positionCopy = position;
-			BodyCreationSettings* settings = JPH.JPH_BodyCreationSettings_Create3(shape, &positionCopy, &rotation, motionType, objectLayer);
-			BodyID bodyID = JPH.JPH_BodyInterface_CreateAndAddBody(bodyInterface, settings, activation);
-			JPH.JPH_BodyCreationSettings_Destroy(settings);
-			return bodyID;
-		}
-
 		static void CreateStack(Vec3 basePosition, int size, float halfExtent)
 		{
-			Shape* boxShape = Shapes.Box(.(halfExtent, halfExtent, halfExtent));
+			ShapeRef boxShape = .Box(.(halfExtent, halfExtent, halfExtent));
 
 			for (int i = 0; i < size; i++)
 			{
@@ -48,73 +34,63 @@ namespace example
 						basePosition.Y + (i * 2 + 1) * halfExtent,
 						basePosition.Z);
 
-					CreateBody(boxShape, position, (MotionType)2, LayerMoving);
+					world.CreateBody(boxShape, position, .Dynamic, LayerMoving);
 				}
 			}
 
-			Shapes.Release(boxShape);
+			boxShape.Destroy();
 		}
 
-		static BodyID CreateDynamic(RVec3 position, Shape* shape, Vec3 velocity)
+		static BodyHandle CreateDynamic(RVec3 position, ShapeRef shape, Vec3 velocity)
 		{
-			BodyID bodyID = CreateBody(shape, position, (MotionType)2, LayerMoving);
-			Vec3 velocityCopy = velocity;
-			JPH.JPH_BodyInterface_SetLinearVelocity(bodyInterface, bodyID, &velocityCopy);
-			return bodyID;
+			BodyHandle body = world.CreateBody(shape, position, .Dynamic, LayerMoving);
+			body.SetLinearAndAngularVelocity(velocity, .(0.0f, 0.25f, 0.0f));
+			body.AddAngularImpulse(.(0.0f, 0.0f, 0.1f));
+			return body;
 		}
 
 		static void RunBroadPhaseFilterQuery()
 		{
-			NarrowPhaseQuery* query = JPH.JPH_PhysicsSystem_GetNarrowPhaseQueryNoLock(physicsSystem);
-			RVec3 origin = .(0.0f, 100.0f, 0.0f);
-			Vec3 direction = .(0.0f, -200.0f, 0.0f);
 			RayCastResult hit = default;
-			JPH.JPH_NarrowPhaseQuery_CastRay(query, &origin, &direction, &hit, broadPhaseLayerFilter, null, null);
+			world.CastRay(.(0.0f, 100.0f, 0.0f), .(0.0f, -200.0f, 0.0f), ref hit, &broadPhaseFilter);
 		}
 
 		static void InitPhysics(bool interactive)
 		{
-			JPH.JPH_Init();
+			Physics.Init();
 
-			jobSystem = JPH.JPH_JobSystemThreadPool_Create(null);
+			world = .();
+			world.MapLayer(LayerNonMoving, BroadPhaseNonMoving);
+			world.MapLayer(LayerMoving, BroadPhaseMoving);
+			world.EnableCollision(LayerNonMoving, LayerMoving);
+			world.EnableCollision(LayerMoving, LayerMoving);
 
-			broadPhaseLayerFilterProcs = .();
-			broadPhaseLayerFilterProcs.ShouldCollide = => BroadPhaseShouldCollide;
-			JPH.JPH_BroadPhaseLayerFilter_SetProcs(&broadPhaseLayerFilterProcs);
-			broadPhaseLayerFilter = JPH.JPH_BroadPhaseLayerFilter_Create(null);
+			broadPhaseFilter = .(=> BroadPhaseShouldCollide);
 
-			objectLayerPairFilter = JPH.JPH_ObjectLayerPairFilterTable_Create(2);
-			JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilter, LayerNonMoving, LayerMoving);
-			JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(objectLayerPairFilter, LayerMoving, LayerMoving);
+			ShapeRef groundShape = .Box(.(100.0f, 1.0f, 100.0f));
+			world.CreateBody(groundShape, .(0.0f, -1.0f, 0.0f), .Static, LayerNonMoving, .DontActivate);
+			groundShape.Destroy();
 
-			broadPhaseLayerInterface = JPH.JPH_BroadPhaseLayerInterfaceTable_Create(2, 2);
-			JPH.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(broadPhaseLayerInterface, LayerNonMoving, BroadPhaseNonMoving);
-			JPH.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(broadPhaseLayerInterface, LayerMoving, BroadPhaseMoving);
+			Triangle meshTriangle = .()
+			{
+				V1 = .(-8.0f, 0.0f, -8.0f),
+				V2 = .(8.0f, 0.0f, -8.0f),
+				V3 = .(0.0f, 0.0f, 8.0f),
+				MaterialIndex = 0
+			};
+			ShapeRef meshShape = .Mesh(&meshTriangle, 1);
+			world.CreateBody(meshShape, .(0.0f, 0.0f, 25.0f), .Static, LayerNonMoving, .DontActivate);
+			meshShape.Destroy();
 
-			objectVsBroadPhaseLayerFilter = JPH.JPH_ObjectVsBroadPhaseLayerFilterTable_Create(
-				broadPhaseLayerInterface,
-				2,
-				objectLayerPairFilter,
-				2);
-
-			PhysicsSystemSettings settings = .();
-			settings.MaxBodies = 65536;
-			settings.NumBodyMutexes = 0;
-			settings.MaxBodyPairs = 65536;
-			settings.MaxContactConstraints = 10240;
-			settings.BroadPhaseLayerInterface = broadPhaseLayerInterface;
-			settings.ObjectLayerPairFilter = objectLayerPairFilter;
-			settings.ObjectVsBroadPhaseLayerFilter = objectVsBroadPhaseLayerFilter;
-
-			physicsSystem = JPH.JPH_PhysicsSystem_Create(&settings);
-			bodyInterface = JPH.JPH_PhysicsSystem_GetBodyInterface(physicsSystem);
-
-			Vec3 gravity = .(0.0f, -9.81f, 0.0f);
-			JPH.JPH_PhysicsSystem_SetGravity(physicsSystem, &gravity);
-
-			Shape* groundShape = Shapes.Box(.(100.0f, 1.0f, 100.0f));
-			CreateBody(groundShape, .(0.0f, -1.0f, 0.0f), (MotionType)0, LayerNonMoving, .DontActivate);
-			Shapes.Release(groundShape);
+			voxelTerrain = .Create(2.0f);
+			voxelBody = voxelTerrain.CreateBody(&world, .(-18.0f, 0.0f, 8.0f), .Static, LayerNonMoving, .DontActivate);
+			voxelTerrain.BeginEdit();
+			voxelTerrain.Add(.(0, 0, 0));
+			uint32 raisedVoxel = voxelTerrain.Add(.(1, 0, 0));
+			voxelTerrain.Add(.(0, 1, 0));
+			voxelTerrain.Move(raisedVoxel, .(1, 1, 0));
+			voxelTerrain.AdjustCenterOfMass();
+			voxelTerrain.NotifyChanged(voxelBody, true, .DontActivate);
 
 			float stackZ = 10.0f;
 			for (int i = 0; i < 5; i++)
@@ -123,24 +99,24 @@ namespace example
 				CreateStack(.(0.0f, 0.0f, stackZ), 10, 2.0f);
 			}
 
-			Shape* sphereShape = Shapes.Sphere(10.0f);
+			ShapeRef sphereShape = .Sphere(10.0f);
 			dynamicBody = CreateDynamic(.(0.0f, 40.0f, 100.0f), sphereShape, .(0.0f, -50.0f, -100.0f));
-			Shapes.Release(sphereShape);
+			sphereShape.Destroy();
 
-			JPH.JPH_PhysicsSystem_OptimizeBroadPhase(physicsSystem);
+			world.OptimizeBroadPhase();
 		}
 
 		static void StepPhysics(bool interactive)
 		{
-			JPH.JPH_PhysicsSystem_Update(physicsSystem, 1.0f / 60.0f, 1, jobSystem);
+			world.Step(1.0f / 60.0f);
 		}
 
 		static void CleanupPhysics(bool interactive)
 		{
-			JPH.JPH_PhysicsSystem_Destroy(physicsSystem);
-			JPH.JPH_BroadPhaseLayerFilter_Destroy(broadPhaseLayerFilter);
-			JPH.JPH_JobSystem_Destroy(jobSystem);
-			JPH.JPH_Shutdown();
+			world.Destroy();
+			broadPhaseFilter.Destroy();
+			voxelTerrain.Destroy();
+			Physics.Shutdown();
 		}
 
 		public static int Main()
@@ -153,10 +129,9 @@ namespace example
 
 			RunBroadPhaseFilterQuery();
 
-			RVec3 position = default;
-			JPH.JPH_BodyInterface_GetPosition(bodyInterface, dynamicBody, &position);
-
+			RVec3 position = dynamicBody.Position;
 			Console.WriteLine(scope $"{position.X}, {position.Y}, {position.Z}");
+
 			CleanupPhysics(false);
 			return 0;
 		}
