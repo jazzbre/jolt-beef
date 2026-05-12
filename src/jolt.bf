@@ -6170,6 +6170,11 @@ public struct PhysicsWorld
 		JPH.JPH_ObjectLayerPairFilterTable_EnableCollision(ObjectLayerPairFilter, layer1, layer2);
 	}
 
+	public void DisableCollision(ObjectLayer layer1, ObjectLayer layer2)
+	{
+		JPH.JPH_ObjectLayerPairFilterTable_DisableCollision(ObjectLayerPairFilter, layer1, layer2);
+	}
+
 	public BodyHandle CreateBody(ShapeRef shape, RVec3 position, MotionType motionType, ObjectLayer objectLayer, Activation activation = .Activate, Quat rotation = .Identity)
 	{
 		RVec3 positionCopy = position;
