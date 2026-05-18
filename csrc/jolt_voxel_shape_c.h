@@ -8,11 +8,13 @@ extern "C" {
 
 typedef bool(JPH_API_CALL *JPH_VoxelShape_VisitVoxelCallback)(void *userData, uint32_t x, uint32_t y, uint32_t z, JPH_SubShapeID voxelIndex);
 typedef bool(JPH_API_CALL *JPH_VoxelShape_ShouldVisitRangeCallback)(void *userData, uint32_t minX, uint32_t minY, uint32_t minZ, uint32_t maxX, uint32_t maxY, uint32_t maxZ);
+typedef bool(JPH_API_CALL *JPH_VoxelShape_VisitRangeCallback)(void *userData, uint32_t minX, uint32_t minY, uint32_t minZ, uint32_t maxX, uint32_t maxY, uint32_t maxZ);
 
 typedef struct JPH_VoxelShape_Procs {
 	bool(JPH_API_CALL *IsVoxelActive)(void *userData, uint32_t x, uint32_t y, uint32_t z, JPH_SubShapeID voxelIndex);
 	bool(JPH_API_CALL *VisitActiveVoxels)(void *userData, uint32_t minX, uint32_t minY, uint32_t minZ, uint32_t maxX, uint32_t maxY, uint32_t maxZ, uint32_t requiredExposedFaces, JPH_VoxelShape_ShouldVisitRangeCallback rangeFilter, void *rangeFilterUserData, JPH_VoxelShape_VisitVoxelCallback visitor, void *visitorUserData);
 	bool(JPH_API_CALL *HasActiveVoxels)(void *userData, uint32_t minX, uint32_t minY, uint32_t minZ, uint32_t maxX, uint32_t maxY, uint32_t maxZ, uint32_t requiredExposedFaces, JPH_VoxelShape_ShouldVisitRangeCallback rangeFilter, void *rangeFilterUserData);
+	bool(JPH_API_CALL *VisitActiveVoxelRanges)(void *userData, uint32_t minX, uint32_t minY, uint32_t minZ, uint32_t maxX, uint32_t maxY, uint32_t maxZ, uint32_t requiredExposedFaces, JPH_VoxelShape_ShouldVisitRangeCallback rangeFilter, void *rangeFilterUserData, JPH_VoxelShape_VisitRangeCallback visitor, void *visitorUserData);
 	bool(JPH_API_CALL *CastRayClosest)(void *userData, const JPH_Vec3 *origin, const JPH_Vec3 *direction, float maxFraction, const JPH_Vec3 *voxelHalfExtent, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, JPH_SubShapeID *outVoxelIndex, float *outFraction);
 	bool(JPH_API_CALL *VisitRayVoxels)(void *userData, const JPH_Vec3 *origin, const JPH_Vec3 *direction, float maxFraction, const JPH_Vec3 *voxelHalfExtent, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, JPH_VoxelShape_VisitVoxelCallback visitor, void *visitorUserData);
 	bool(JPH_API_CALL *VisitBoxCastVoxels)(void *userData, const JPH_AABox *startBounds, const JPH_Vec3 *direction, float maxFraction, const JPH_Vec3 *voxelHalfExtent, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, JPH_VoxelShape_VisitVoxelCallback visitor, void *visitorUserData);

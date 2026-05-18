@@ -17,6 +17,7 @@ JPH_NAMESPACE_BEGIN
 class CollideShapeSettings;
 class BoxShape;
 template <class Visitor> class JPHC_VoxelDataVisitorAdapter;
+template <class Visitor> class JPHC_VoxelDataRangeVisitorAdapter;
 
 /// Visitor interface for accelerated voxel data backends.
 class JPH_EXPORT JPHC_VoxelShapeDataVisitor
@@ -38,6 +39,16 @@ public:
 	virtual bool			ShouldVisitRange(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ) const = 0;
 };
 
+/// Visitor for occupied voxel ranges. Ranges must be conservative but should only cover actually occupied spans.
+class JPH_EXPORT JPHC_VoxelShapeDataRangeVisitor
+{
+public:
+	virtual					~JPHC_VoxelShapeDataRangeVisitor() = default;
+
+	/// Return false to stop visiting.
+	virtual bool			VisitRange(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ) = 0;
+};
+
 /// Non-owned interface that lets JPHC_VoxelShape query external voxel/chunk data.
 class JPH_EXPORT JPHC_VoxelShapeDataInterface
 {
@@ -52,6 +63,9 @@ public:
 
 	/// Return true if the range contains at least one active collision voxel.
 	virtual bool			HasActiveVoxels(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ, uint inRequiredExposedFaces, const JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const = 0;
+
+	/// Visit occupied voxel ranges in [min, max). Return false if traversal was aborted by the visitor.
+	virtual bool			VisitActiveVoxelRanges(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ, uint inRequiredExposedFaces, JPHC_VoxelShapeDataRangeVisitor &ioVisitor, const JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const = 0;
 
 	/// Closest ray cast. Must return the first active voxel hit by the ray and a Jolt ray fraction.
 	virtual bool			CastRayClosest(const RayCast &inRay, float inMaxFraction, Vec3Arg inVoxelHalfExtent, uint inSizeX, uint inSizeY, uint inSizeZ, SubShapeID::Type &outVoxelIndex, float &outFraction) const = 0;
@@ -165,6 +179,7 @@ public:
 
 private:
 	template <class Visitor> friend class JPHC_VoxelDataVisitorAdapter;
+	template <class Visitor> friend class JPHC_VoxelDataRangeVisitorAdapter;
 	friend class			JPHC_WorldBoundsVoxelRangeFilter;
 	friend class			JPHC_OtherVoxelShapeRangeFilter;
 
@@ -177,6 +192,9 @@ private:
 
 	template <class Visitor>
 	void					WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, bool inRecordTouchedVoxels = true, uint inRequiredExposedFaces = 0, const JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
+
+	template <class Visitor>
+	void					WalkVoxelRanges(const VoxelRange &inRange, Visitor &ioVisitor, uint inRequiredExposedFaces = 0, const JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
 
 	template <class Visitor>
 	void					WalkRayVoxels(const RayCast &inRay, float inMaxFraction, Visitor &ioVisitor) const;

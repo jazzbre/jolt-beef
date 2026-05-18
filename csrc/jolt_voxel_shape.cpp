@@ -211,6 +211,24 @@ private:
 	bool				mRecordTouchedVoxels;
 };
 
+template <class Visitor>
+class JPHC_VoxelDataRangeVisitorAdapter final : public JPHC_VoxelShapeDataRangeVisitor
+{
+public:
+						JPHC_VoxelDataRangeVisitorAdapter(Visitor &ioVisitor) :
+		mVisitor(ioVisitor)
+	{
+	}
+
+	virtual bool		VisitRange(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ) override
+	{
+		return mVisitor(JPHC_VoxelShape::VoxelRange { inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ });
+	}
+
+private:
+	Visitor &			mVisitor;
+};
+
 uint JPHC_VoxelShape::sCalculateVoxelIndexBits(uint inSizeX, uint inSizeY, uint inSizeZ)
 {
 	uint64 num_voxels = uint64(inSizeX) * uint64(inSizeY) * uint64(inSizeZ);
@@ -233,6 +251,17 @@ void JPHC_VoxelShape::WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, 
 
 	JPHC_VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor, inRecordTouchedVoxels);
 	mVoxelDataInterface->VisitActiveVoxels(inRange.mMinX, inRange.mMinY, inRange.mMinZ, inRange.mMaxX, inRange.mMaxY, inRange.mMaxZ, inRequiredExposedFaces, visitor, inRangeFilter);
+}
+
+template <class Visitor>
+void JPHC_VoxelShape::WalkVoxelRanges(const VoxelRange &inRange, Visitor &ioVisitor, uint inRequiredExposedFaces, const JPHC_VoxelShapeDataRangeFilter *inRangeFilter) const
+{
+	JPH_ASSERT(mVoxelDataInterface != nullptr);
+	if (mVoxelDataInterface == nullptr)
+		return;
+
+	JPHC_VoxelDataRangeVisitorAdapter<Visitor> visitor(ioVisitor);
+	mVoxelDataInterface->VisitActiveVoxelRanges(inRange.mMinX, inRange.mMinY, inRange.mMinZ, inRange.mMaxX, inRange.mMaxY, inRange.mMaxZ, inRequiredExposedFaces, visitor, inRangeFilter);
 }
 
 template <class Visitor>
@@ -374,8 +403,7 @@ public:
 	{
 		AABox source_range_in_target = mSourceShape->GetVoxelRangeLocalBounds(inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ).Scaled(mSourceScale).Transformed(mSourceToTarget).Scaled(mInvTargetScale);
 		JPHC_VoxelShape::VoxelRange target_range = mTargetShape->GetVoxelRangeOverlappingLocalBounds(source_range_in_target);
-		uint target_required_exposed_faces = mTargetShape->GetRequiredExposedFacesForBounds(source_range_in_target);
-		return mTargetShape->HasActiveVoxels(target_range, target_required_exposed_faces);
+		return mTargetShape->HasActiveVoxels(target_range);
 	}
 
 private:
@@ -727,7 +755,6 @@ void JPHC_VoxelShape::sCollideVoxelVsShape(const Shape *inShape1, const Shape *i
 	AABox shape2_bounds = inShape2->GetLocalBounds().Scaled(inScale2).Transformed(inCenterOfMassTransform1.InversedRotationTranslation() * inCenterOfMassTransform2).Scaled(Vec3::sOne() / inScale1);
 	AABox shape2_world_bounds = inShape2->GetWorldSpaceBounds(inCenterOfMassTransform2, inScale2);
 	VoxelRange range = shape1->GetVoxelRangeOverlappingLocalBounds(shape2_bounds);
-	uint required_exposed_faces = shape1->GetRequiredExposedFacesForBounds(shape2_bounds);
 	JPHC_WorldBoundsVoxelRangeFilter range_filter(shape1, inScale1, inCenterOfMassTransform1, shape2_world_bounds);
 	auto visitor = [shape1, &box, inShape2, inScale1, inScale2, inCenterOfMassTransform1, inCenterOfMassTransform2, &shape2_world_bounds, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter](SubShapeID::Type inVoxelIndex, Vec3Arg inVoxelCenter) {
 		Mat44 voxel_transform = inCenterOfMassTransform1.PreTranslated(inScale1 * inVoxelCenter);
@@ -738,7 +765,7 @@ void JPHC_VoxelShape::sCollideVoxelVsShape(const Shape *inShape1, const Shape *i
 		}
 		return !ioCollector.ShouldEarlyOut();
 	};
-	shape1->WalkVoxels(range, visitor, false, required_exposed_faces, &range_filter);
+	shape1->WalkVoxels(range, visitor, false, 0, &range_filter);
 }
 
 void JPHC_VoxelShape::sCollideShapeVsVoxel(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
@@ -753,7 +780,6 @@ void JPHC_VoxelShape::sCollideShapeVsVoxel(const Shape *inShape1, const Shape *i
 	AABox shape1_bounds = inShape1->GetLocalBounds().Scaled(inScale1).Transformed(inCenterOfMassTransform2.InversedRotationTranslation() * inCenterOfMassTransform1).Scaled(Vec3::sOne() / inScale2);
 	AABox shape1_world_bounds = inShape1->GetWorldSpaceBounds(inCenterOfMassTransform1, inScale1);
 	VoxelRange range = shape2->GetVoxelRangeOverlappingLocalBounds(shape1_bounds);
-	uint required_exposed_faces = shape2->GetRequiredExposedFacesForBounds(shape1_bounds);
 	JPHC_WorldBoundsVoxelRangeFilter range_filter(shape2, inScale2, inCenterOfMassTransform2, shape1_world_bounds);
 	auto visitor = [shape2, inShape1, &box, inScale1, inScale2, inCenterOfMassTransform1, inCenterOfMassTransform2, &shape1_world_bounds, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter](SubShapeID::Type inVoxelIndex, Vec3Arg inVoxelCenter) {
 		Mat44 voxel_transform = inCenterOfMassTransform2.PreTranslated(inScale2 * inVoxelCenter);
@@ -764,7 +790,7 @@ void JPHC_VoxelShape::sCollideShapeVsVoxel(const Shape *inShape1, const Shape *i
 		}
 		return !ioCollector.ShouldEarlyOut();
 	};
-	shape2->WalkVoxels(range, visitor, false, required_exposed_faces, &range_filter);
+	shape2->WalkVoxels(range, visitor, false, 0, &range_filter);
 }
 
 void JPHC_VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
@@ -784,14 +810,12 @@ void JPHC_VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *i
 	Mat44 transform1_to_2 = inCenterOfMassTransform2.InversedRotationTranslation() * inCenterOfMassTransform1;
 	AABox shape2_bounds_in_1 = shape2->GetLocalBounds().Scaled(inScale2).Transformed(inCenterOfMassTransform1.InversedRotationTranslation() * inCenterOfMassTransform2).Scaled(Vec3::sOne() / inScale1);
 	VoxelRange shape1_range = shape1->GetVoxelRangeOverlappingLocalBounds(shape2_bounds_in_1);
-	uint shape1_required_exposed_faces = shape1->GetRequiredExposedFacesForBounds(shape2_bounds_in_1);
 	JPHC_OtherVoxelShapeRangeFilter shape1_range_filter(shape1, shape2, inScale1, inScale2, transform1_to_2);
 
 	auto visitor1 = [shape1, shape2, &box1, &box2, inScale1, inScale2, inCenterOfMassTransform1, inCenterOfMassTransform2, transform1_to_2, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter2](SubShapeID::Type inVoxelIndex1, Vec3Arg inVoxelCenter1) {
 		Mat44 voxel1_transform = inCenterOfMassTransform1.PreTranslated(inScale1 * inVoxelCenter1);
 		AABox voxel1_bounds_in_2 = box1.GetLocalBounds().Scaled(inScale1).Transformed(transform1_to_2.PreTranslated(inScale1 * inVoxelCenter1)).Scaled(Vec3::sOne() / inScale2);
 		VoxelRange shape2_range = shape2->GetVoxelRangeOverlappingLocalBounds(voxel1_bounds_in_2);
-		uint shape2_required_exposed_faces = shape2->GetRequiredExposedFacesForBounds(voxel1_bounds_in_2);
 
 		bool touched_voxel1 = false;
 		auto visitor2 = [shape1, shape2, &box1, &box2, inScale1, inScale2, voxel1_transform, inCenterOfMassTransform2, inVoxelIndex1, &touched_voxel1, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter2](SubShapeID::Type inVoxelIndex2, Vec3Arg inVoxelCenter2) {
@@ -805,10 +829,14 @@ void JPHC_VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *i
 			CollisionDispatch::sCollideShapeVsShape(&box1, &box2, inScale1, inScale2, voxel1_transform, inCenterOfMassTransform2.PreTranslated(inScale2 * inVoxelCenter2), shape1->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator1, inVoxelIndex1), shape2->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator2, inVoxelIndex2), inCollideShapeSettings, ioCollector, shape_filter2);
 			return !ioCollector.ShouldEarlyOut();
 		};
-		shape2->WalkVoxels(shape2_range, visitor2, false, shape2_required_exposed_faces);
+		shape2->WalkVoxels(shape2_range, visitor2, false);
 		return !ioCollector.ShouldEarlyOut();
 	};
-	shape1->WalkVoxels(shape1_range, visitor1, false, shape1_required_exposed_faces, &shape1_range_filter);
+	auto range_visitor1 = [shape1, &visitor1, &ioCollector](const VoxelRange &inRange) {
+		shape1->WalkVoxels(inRange, visitor1, false);
+		return !ioCollector.ShouldEarlyOut();
+	};
+	shape1->WalkVoxelRanges(shape1_range, range_visitor1, 0, &shape1_range_filter);
 }
 
 void JPHC_VoxelShape::sCastVoxelVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)
@@ -897,10 +925,21 @@ struct VoxelVisitorForwarder
 	JPH::JPHC_VoxelShapeDataVisitor *mVisitor;
 };
 
+struct VoxelRangeVisitorForwarder
+{
+	JPH::JPHC_VoxelShapeDataRangeVisitor *mVisitor;
+};
+
 static bool JPH_API_CALL VisitVoxelThunk(void *inUserData, uint32_t inX, uint32_t inY, uint32_t inZ, JPH_SubShapeID inVoxelIndex)
 {
 	VoxelVisitorForwarder *forwarder = static_cast<VoxelVisitorForwarder *>(inUserData);
 	return forwarder->mVisitor->VisitVoxel(inX, inY, inZ, inVoxelIndex);
+}
+
+static bool JPH_API_CALL VisitRangeThunk(void *inUserData, uint32_t inMinX, uint32_t inMinY, uint32_t inMinZ, uint32_t inMaxX, uint32_t inMaxY, uint32_t inMaxZ)
+{
+	VoxelRangeVisitorForwarder *forwarder = static_cast<VoxelRangeVisitorForwarder *>(inUserData);
+	return forwarder->mVisitor->VisitRange(inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ);
 }
 
 static bool JPH_API_CALL ShouldVisitRangeThunk(void *inUserData, uint32_t inMinX, uint32_t inMinY, uint32_t inMinZ, uint32_t inMaxX, uint32_t inMaxY, uint32_t inMaxZ)
@@ -932,6 +971,12 @@ public:
 	virtual bool HasActiveVoxels(JPH::uint inMinX, JPH::uint inMinY, JPH::uint inMinZ, JPH::uint inMaxX, JPH::uint inMaxY, JPH::uint inMaxZ, JPH::uint inRequiredExposedFaces, const JPH::JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const override
 	{
 		return mProcs.HasActiveVoxels(mUserData, inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ, inRequiredExposedFaces, inRangeFilter != nullptr? ShouldVisitRangeThunk : nullptr, const_cast<JPH::JPHC_VoxelShapeDataRangeFilter *>(inRangeFilter));
+	}
+
+	virtual bool VisitActiveVoxelRanges(JPH::uint inMinX, JPH::uint inMinY, JPH::uint inMinZ, JPH::uint inMaxX, JPH::uint inMaxY, JPH::uint inMaxZ, JPH::uint inRequiredExposedFaces, JPH::JPHC_VoxelShapeDataRangeVisitor &ioVisitor, const JPH::JPHC_VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const override
+	{
+		VoxelRangeVisitorForwarder forwarder { &ioVisitor };
+		return mProcs.VisitActiveVoxelRanges(mUserData, inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ, inRequiredExposedFaces, inRangeFilter != nullptr? ShouldVisitRangeThunk : nullptr, const_cast<JPH::JPHC_VoxelShapeDataRangeFilter *>(inRangeFilter), VisitRangeThunk, &forwarder);
 	}
 
 	virtual bool CastRayClosest(const JPH::RayCast &inRay, float inMaxFraction, JPH::Vec3Arg inVoxelHalfExtent, JPH::uint inSizeX, JPH::uint inSizeY, JPH::uint inSizeZ, JPH::SubShapeID::Type &outVoxelIndex, float &outFraction) const override
@@ -978,6 +1023,7 @@ static bool AreVoxelShapeProcsValid(const JPH_VoxelShape_Procs *inProcs)
 		&& inProcs->IsVoxelActive != nullptr
 		&& inProcs->VisitActiveVoxels != nullptr
 		&& inProcs->HasActiveVoxels != nullptr
+		&& inProcs->VisitActiveVoxelRanges != nullptr
 		&& inProcs->CastRayClosest != nullptr
 		&& inProcs->VisitRayVoxels != nullptr
 		&& inProcs->VisitBoxCastVoxels != nullptr;

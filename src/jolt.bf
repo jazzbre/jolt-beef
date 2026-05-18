@@ -1222,9 +1222,11 @@ public struct VoxelShape_Procs
 {
 	public typealias VisitVoxelFunction = function bool(void* userData, uint32 x, uint32 y, uint32 z, SubShapeID voxelIndex);
 	public typealias ShouldVisitRangeFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ);
+	public typealias VisitRangeFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ);
 	public typealias IsVoxelActiveFunction = function bool(void* userData, uint32 x, uint32 y, uint32 z, SubShapeID voxelIndex);
 	public typealias VisitActiveVoxelsFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, uint32 requiredExposedFaces, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData, VisitVoxelFunction visitor, void* visitorUserData);
 	public typealias HasActiveVoxelsFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, uint32 requiredExposedFaces, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData);
+	public typealias VisitActiveVoxelRangesFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, uint32 requiredExposedFaces, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData, VisitRangeFunction visitor, void* visitorUserData);
 	public typealias CastRayClosestFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, SubShapeID* outVoxelIndex, float* outFraction);
 	public typealias VisitRayVoxelsFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
 	public typealias VisitBoxCastVoxelsFunction = function bool(void* userData, AABox* startBounds, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
@@ -1232,6 +1234,7 @@ public struct VoxelShape_Procs
 	public IsVoxelActiveFunction IsVoxelActive = null;
 	public VisitActiveVoxelsFunction VisitActiveVoxels = null;
 	public HasActiveVoxelsFunction HasActiveVoxels = null;
+	public VisitActiveVoxelRangesFunction VisitActiveVoxelRanges = null;
 	public CastRayClosestFunction CastRayClosest = null;
 	public VisitRayVoxelsFunction VisitRayVoxels = null;
 	public VisitBoxCastVoxelsFunction VisitBoxCastVoxels = null;
