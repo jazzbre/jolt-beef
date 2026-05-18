@@ -1,0 +1,28 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f54918e..8c6fa38 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -323,6 +323,15 @@ set(SOURCE_FILES
+ 	${CMAKE_CURRENT_SOURCE_DIR}/src/joltc.c
+ )
+ 
++set(JOLT_BEEF_CSRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../csrc")
++if (EXISTS "${JOLT_BEEF_CSRC_DIR}/jolt_voxel_shape.cpp")
++	list(APPEND SOURCE_FILES
++		${JOLT_BEEF_CSRC_DIR}/jolt_voxel_shape.h
++		${JOLT_BEEF_CSRC_DIR}/jolt_voxel_shape_c.h
++		${JOLT_BEEF_CSRC_DIR}/jolt_voxel_shape.cpp
++	)
++endif()
++
+ if (JPH_BUILD_SHARED)
+ 	add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
+ else()
+@@ -335,6 +344,7 @@ endif ()
+ 
+ target_include_directories(${TARGET_NAME} PUBLIC
+ 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
++	$<BUILD_INTERFACE:${JOLT_BEEF_CSRC_DIR}>
+ 	${JoltPhysics_SOURCE_DIR}/..
+ )
+ target_link_libraries(${TARGET_NAME} PRIVATE Jolt)

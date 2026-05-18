@@ -125,7 +125,11 @@ public enum ShapeSubType : int32
 	Mesh = 12,
 	HeightField = 13,
 	SoftBody = 14,
-	JPHShapeSubTypeCount = 15,
+	User1 = 15,
+	User2 = 16,
+	User3 = 17,
+	User4 = 18,
+	JPHShapeSubTypeCount = 19,
 	JPHShapeSubTypeForce32 = 2147483647
 }
 
@@ -1214,6 +1218,26 @@ public struct PhysicsStepListener_Procs
 }
 
 [CRepr]
+public struct VoxelShape_Procs
+{
+	public typealias VisitVoxelFunction = function bool(void* userData, uint32 x, uint32 y, uint32 z, SubShapeID voxelIndex);
+	public typealias ShouldVisitRangeFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ);
+	public typealias IsVoxelActiveFunction = function bool(void* userData, uint32 x, uint32 y, uint32 z, SubShapeID voxelIndex);
+	public typealias VisitActiveVoxelsFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, uint32 requiredExposedFaces, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData, VisitVoxelFunction visitor, void* visitorUserData);
+	public typealias HasActiveVoxelsFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, uint32 requiredExposedFaces, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData);
+	public typealias CastRayClosestFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, SubShapeID* outVoxelIndex, float* outFraction);
+	public typealias VisitRayVoxelsFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
+	public typealias VisitBoxCastVoxelsFunction = function bool(void* userData, AABox* startBounds, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
+
+	public IsVoxelActiveFunction IsVoxelActive = null;
+	public VisitActiveVoxelsFunction VisitActiveVoxels = null;
+	public HasActiveVoxelsFunction HasActiveVoxels = null;
+	public CastRayClosestFunction CastRayClosest = null;
+	public VisitRayVoxelsFunction VisitRayVoxels = null;
+	public VisitBoxCastVoxelsFunction VisitBoxCastVoxels = null;
+}
+
+[CRepr]
 public struct BroadPhaseLayerFilter_Procs
 {
 	public typealias ShouldCollideFunction = function bool(void* userData, BroadPhaseLayer layer);
@@ -1965,6 +1989,42 @@ public static class JPH
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern bool JPH_Shape_CollidePoint2(Shape* shape, Vec3* point, CollisionCollectorType collectorType, void* callback, void* userData, ShapeFilter* shapeFilter);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern bool JPH_VoxelShape_Register();
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern Shape* JPH_VoxelShape_Create(VoxelShape_Procs* procs, void* userData, uint32 sizeX, uint32 sizeY, uint32 sizeZ, Vec3* voxelHalfExtent, float convexRadius);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_VoxelShape_GetSizeX(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_VoxelShape_GetSizeY(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_VoxelShape_GetSizeZ(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_GetVoxelHalfExtent(Shape* shape, Vec3* halfExtent);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern float JPH_VoxelShape_GetConvexRadius(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_SetRecordTouchedVoxels(bool enabled);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_SetDrawTouchedVoxels(bool enabled);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_ClearTouchedVoxels(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_VoxelShape_GetTouchedVoxelCount(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_VoxelShape_GetTouchedVoxels(Shape* shape, SubShapeID* outVoxelIndices, uint32 maxCount);
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern float JPH_ConvexShapeSettings_GetDensity(ConvexShapeSettings* shape);
@@ -5235,7 +5295,10 @@ public static class Physics
 {
 	public static bool Init()
 	{
-		return JPH.JPH_Init();
+		bool result = JPH.JPH_Init();
+		if (result)
+			JPH.JPH_VoxelShape_Register();
+		return result;
 	}
 
 	public static void Shutdown()
@@ -5305,6 +5368,12 @@ public struct ShapeRef
 	{
 		Vec3 halfExtentCopy = halfExtent;
 		return .((Shape*)JPH.JPH_BoxShape_Create(&halfExtentCopy, convexRadius));
+	}
+
+	public static ShapeRef Voxel(VoxelShape_Procs* procs, void* userData, uint32 sizeX, uint32 sizeY, uint32 sizeZ, Vec3 voxelHalfExtent, float convexRadius = 0.0f)
+	{
+		Vec3 voxelHalfExtentCopy = voxelHalfExtent;
+		return .(JPH.JPH_VoxelShape_Create(procs, userData, sizeX, sizeY, sizeZ, &voxelHalfExtentCopy, convexRadius));
 	}
 
 	public static ShapeRef Plane(Plane plane, float halfExtent, PhysicsMaterial* material = null)
@@ -5426,6 +5495,21 @@ public struct ShapeRef
 		return .((Shape*)shape);
 	}
 
+	public uint32 GetTouchedVoxelCount()
+	{
+		return JPH.JPH_VoxelShape_GetTouchedVoxelCount(Handle);
+	}
+
+	public uint32 GetTouchedVoxels(SubShapeID* outVoxelIndices, uint32 maxCount)
+	{
+		return JPH.JPH_VoxelShape_GetTouchedVoxels(Handle, outVoxelIndices, maxCount);
+	}
+
+	public void ClearTouchedVoxels()
+	{
+		JPH.JPH_VoxelShape_ClearTouchedVoxels(Handle);
+	}
+
 	public void Destroy() mut
 	{
 		if ((Handle != null) && OwnsHandle)
@@ -5500,7 +5584,7 @@ public struct MutableCompoundRef
 		return .(.((Shape*)shape), shape);
 	}
 
-	private this(ShapeRef shape, MutableCompoundShape* handle)
+	public this(ShapeRef shape, MutableCompoundShape* handle)
 	{
 		Shape = shape;
 		Handle = handle;
