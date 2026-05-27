@@ -2030,6 +2030,9 @@ public static class JPH
 	public static extern uint32 JPH_VoxelShape_GetTouchedVoxels(Shape* shape, SubShapeID* outVoxelIndices, uint32 maxCount);
 
 	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint64 JPH_VoxelShape_GetVoxelIndexFromSubShapeID(Shape* shape, SubShapeID subShapeId);
+
+	[CLink, CallingConvention(.Cdecl)]
 	public static extern float JPH_ConvexShapeSettings_GetDensity(ConvexShapeSettings* shape);
 
 	[CLink, CallingConvention(.Cdecl)]

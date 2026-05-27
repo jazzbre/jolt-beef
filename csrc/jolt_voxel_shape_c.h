@@ -32,6 +32,7 @@ JPH_CAPI void JPH_VoxelShape_SetDrawTouchedVoxels(bool enabled);
 JPH_CAPI void JPH_VoxelShape_ClearTouchedVoxels(const JPH_Shape *shape);
 JPH_CAPI uint32_t JPH_VoxelShape_GetTouchedVoxelCount(const JPH_Shape *shape);
 JPH_CAPI uint32_t JPH_VoxelShape_GetTouchedVoxels(const JPH_Shape *shape, JPH_SubShapeID *outVoxelIndices, uint32_t maxCount);
+JPH_CAPI uint64_t JPH_VoxelShape_GetVoxelIndexFromSubShapeID(const JPH_Shape *shape, JPH_SubShapeID subShapeID);
 
 #ifdef __cplusplus
 }
