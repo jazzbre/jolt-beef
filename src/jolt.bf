@@ -98,7 +98,7 @@ public enum ShapeType : int32
 	Mesh = 3,
 	HeightField = 4,
 	SoftBody = 5,
-	User1 = 6,
+	Voxel = 6,
 	User2 = 7,
 	User3 = 8,
 	User4 = 9,
@@ -5347,6 +5347,8 @@ public struct ShapeRef
 {
 	public Shape* Handle;
 	public bool OwnsHandle;
+
+	public ShapeType ShapeType => JPH.JPH_Shape_GetType(Handle);
 
 	public this(Shape* handle)
 	{
