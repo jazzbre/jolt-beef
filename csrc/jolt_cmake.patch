@@ -1,0 +1,51 @@
+diff --git a/Jolt/Jolt.cmake b/Jolt/Jolt.cmake
+index 4da6f82d..4b94f932 100644
+--- a/Jolt/Jolt.cmake
++++ b/Jolt/Jolt.cmake
+@@ -469,6 +469,26 @@ source_group(TREE ${JOLT_PHYSICS_ROOT} FILES ${JOLT_PHYSICS_SRC_FILES})
+ add_library(Jolt ${JOLT_PHYSICS_SRC_FILES})
+ add_library(Jolt::Jolt ALIAS Jolt)
+ 
++# VoxelShape is not part of Jolt. It is owned by the jolt-beef repository and lives in its
++# csrc directory, so resetting or cleaning this submodule cannot lose it. It is compiled
++# into Jolt itself rather than into joltc because RegisterTypes.cpp has to register it in
++# the same pass as the built-in shapes. Added with target_sources instead of appended to
++# JOLT_PHYSICS_SRC_FILES because that list is fed to source_group(TREE ...) and to the
++# install loop in Build/CMakeLists.txt, and both reject paths outside this repository.
++get_filename_component(JOLT_BEEF_CSRC_DIR "${PHYSICS_REPO_ROOT}/../../csrc" ABSOLUTE)
++if (EXISTS "${JOLT_BEEF_CSRC_DIR}/VoxelShape.cpp")
++	set(JOLT_BEEF_SRC_FILES
++		${JOLT_BEEF_CSRC_DIR}/VoxelShape.cpp
++		${JOLT_BEEF_CSRC_DIR}/VoxelShape.h
++	)
++	source_group("jolt-beef" FILES ${JOLT_BEEF_SRC_FILES})
++	target_sources(Jolt PRIVATE ${JOLT_BEEF_SRC_FILES})
++	# PUBLIC so RegisterTypes.cpp, joltc and the samples testbed all resolve <VoxelShape.h>.
++	target_include_directories(Jolt PUBLIC $<BUILD_INTERFACE:${JOLT_BEEF_CSRC_DIR}>)
++else()
++	message(FATAL_ERROR "jolt-beef csrc not found at ${JOLT_BEEF_CSRC_DIR}; this Jolt tree is patched for voxel support and cannot build without it")
++endif()
++
+ if (BUILD_SHARED_LIBS)
+ 	# Set default visibility to hidden
+ 	set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+diff --git a/Jolt/RegisterTypes.cpp b/Jolt/RegisterTypes.cpp
+index e343dd2f..eb241ef0 100644
+--- a/Jolt/RegisterTypes.cpp
++++ b/Jolt/RegisterTypes.cpp
+@@ -25,6 +25,7 @@
+ #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
+ #include <Jolt/Physics/Collision/Shape/MutableCompoundShape.h>
+ #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
++#include <VoxelShape.h>
+ #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
+ #include <Jolt/Physics/Collision/PhysicsMaterialSimple.h>
+ #include <Jolt/Physics/SoftBody/SoftBodyShape.h>
+@@ -115,6 +116,7 @@ void RegisterTypesInternal(uint64 inVersionID)
+ 	PlaneShape::sRegister();
+ 	SphereShape::sRegister();
+ 	BoxShape::sRegister();
++	VoxelShape::sRegister();
+ 	CapsuleShape::sRegister();
+ 	TaperedCapsuleShape::sRegister();
+ 	CylinderShape::sRegister();

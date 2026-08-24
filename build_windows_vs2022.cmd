@@ -16,7 +16,21 @@ set "MSBUILD=c:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\
 set "JOLT_PHYSICS_ROOT=%cd%\submodules\JoltPhysics"
 set "JOLTC_ROOT=%cd%\submodules\joltc"
 set "JOLTC_CMAKE_PATCH=%cd%\csrc\joltc_cmake.patch"
+set "JOLT_CMAKE_PATCH=%cd%\csrc\jolt_cmake.patch"
 set "JOLTC_PATCH_APPLIED=0"
+
+REM VoxelShape.cpp/.h live in csrc, not in the Jolt tree. Jolt.cmake still has to compile
+REM them into the Jolt target and RegisterTypes.cpp still has to register the shape, so
+REM those two edits are kept as a patch and applied here. Nothing hand-written is left in
+REM the Jolt submodule, so resetting or cleaning it costs nothing: the next build puts the
+REM wiring back. Unlike the joltc patch this one is left applied: the samples solution
+REM builds Jolt from the same Jolt.cmake, and reversing it after every build would stop
+REM the samples compiling.
+REM Chained with || rather than IF blocks on purpose: this file has Unix line endings,
+REM where a batch label jump can resume mid-line, and %ERRORLEVEL% inside a parenthesised
+REM block expands when the block is parsed rather than when it runs. Read as: if the patch
+REM does not reverse-apply it is not in yet, so apply it, and give up if that fails too.
+git -C "%JOLT_PHYSICS_ROOT%" apply --reverse --check "%JOLT_CMAKE_PATCH%" >nul 2>&1 || git -C "%JOLT_PHYSICS_ROOT%" apply "%JOLT_CMAKE_PATCH%" || exit /b 1
 
 git -C "%JOLTC_ROOT%" apply --check "%JOLTC_CMAKE_PATCH%"
 IF %ERRORLEVEL% EQU 0 (
