@@ -27,6 +27,10 @@ JPH_CAPI uint32_t JPH_VoxelShape_GetSizeY(const JPH_Shape *shape);
 JPH_CAPI uint32_t JPH_VoxelShape_GetSizeZ(const JPH_Shape *shape);
 JPH_CAPI void JPH_VoxelShape_GetVoxelHalfExtent(const JPH_Shape *shape, JPH_Vec3 *halfExtent);
 JPH_CAPI float JPH_VoxelShape_GetConvexRadius(const JPH_Shape *shape);
+/// Recomputes the shape's bounds from the voxels that are still solid. Call after
+/// building the shape and again after voxels are destroyed; leaving it stale is safe,
+/// only conservative.
+JPH_CAPI void JPH_VoxelShape_RefreshActiveBounds(JPH_Shape *shape);
 JPH_CAPI void JPH_VoxelShape_SetRecordTouchedVoxels(bool enabled);
 JPH_CAPI void JPH_VoxelShape_SetDrawTouchedVoxels(bool enabled);
 JPH_CAPI void JPH_VoxelShape_ClearTouchedVoxels(const JPH_Shape *shape);

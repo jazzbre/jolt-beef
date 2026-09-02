@@ -140,6 +140,14 @@ public:
 	/// Calculate the number of SubShapeID bits required to encode all voxel indices
 	static uint				sCalculateVoxelIndexBits(uint inSizeX, uint inSizeY, uint inSizeZ);
 
+	/// Recomputes the bounds of the active voxels, which GetLocalBounds then reports in
+	/// place of the whole grid. A rock filling a third of its grid presents a broadphase
+	/// box a third the size, and the collide range walks are derived from these bounds too.
+	///
+	/// Safe to leave stale: voxels are only ever removed, so an old box can only be larger
+	/// than the truth, never smaller, and larger costs work rather than correctness.
+	void					RefreshActiveBounds();
+
 	// See Shape
 	virtual AABox			GetLocalBounds() const override;
 	virtual uint			GetSubShapeIDBitsRecursive() const override				{ return mVoxelIndexBits; }
@@ -234,6 +242,10 @@ private:
 	Vec3					mVoxelHalfExtent = Vec3::sReplicate(0.5f);
 	float					mConvexRadius = 0.0f;
 	uint					mVoxelIndexBits = 0;
+	/// Only consulted once RefreshActiveBounds has run; until then the whole grid is
+	/// reported, which is the conservative answer.
+	AABox					mActiveBounds { Vec3::sZero(), Vec3::sZero() };
+	bool					mActiveBoundsValid = false;
 #ifdef JPH_DEBUG_RENDERER
 	mutable Array<SubShapeID::Type> mTouchedVoxels;
 #endif // JPH_DEBUG_RENDERER

@@ -217,6 +217,13 @@ float JPH_VoxelShape_GetConvexRadius(const JPH_Shape* inShape)
 	return shape != nullptr ? shape->GetConvexRadius() : 0.0f;
 }
 
+void JPH_VoxelShape_RefreshActiveBounds(JPH_Shape* inShape)
+{
+	JPH::VoxelShape* shape = const_cast<JPH::VoxelShape*>(AsVoxelShape(inShape));
+	if (shape != nullptr)
+		shape->RefreshActiveBounds();
+}
+
 void JPH_VoxelShape_SetRecordTouchedVoxels(bool inEnabled)
 {
 #ifdef JPH_DEBUG_RENDERER

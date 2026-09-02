@@ -1438,6 +1438,55 @@ public struct VehicleTrackSettings
 	public float DifferentialRatio;
 }
 
+/// One profiled scope with its samples for the frame added up. Cycles are processor
+/// ticks; divide by Profiler.ProcessorTicksPerSecond for seconds.
+[CRepr]
+public struct ProfilerSample
+{
+	public char8* Name;
+	public uint32 CallCount;
+	public uint64 TotalCycles;
+	public uint64 MaxCycles;
+}
+
+/// Jolt's own profiler. It has no stop: ProfileThread's destructor dereferences the
+/// profiler singleton, so tearing it down while a worker thread still holds instrumentation
+/// crashes that thread as it exits.
+public static class Profiler
+{
+	public static bool IsAvailable => JPH.JPH_Profiler_IsAvailable();
+	public static bool IsStarted => JPH.JPH_Profiler_IsStarted();
+	public static uint64 ProcessorTicksPerSecond => JPH.JPH_Profiler_GetProcessorTicksPerSecond();
+
+	/// Only threads that already existed when the profiler started are instrumented, and
+	/// Jolt's workers instrument themselves as they spawn, so starting this before the
+	/// physics system is created covers all of them and starting it later covers only the
+	/// caller - which still sees the share of the physics jobs Jolt runs on that thread.
+	public static void Start(StringView threadName)
+	{
+		var name = scope String(threadName);
+		JPH.JPH_Profiler_Start(name.CStr());
+	}
+
+	/// Ends the frame and clears every thread's samples, so read them before calling this.
+	public static void NextFrame()
+	{
+		JPH.JPH_Profiler_NextFrame();
+	}
+
+	/// Writes Jolt's HTML chart for every instrumented thread on the next NextFrame call.
+	public static void Dump(StringView tag)
+	{
+		var tagText = scope String(tag);
+		JPH.JPH_Profiler_Dump(tagText.CStr());
+	}
+
+	public static uint32 GetCallingThreadSamples(ProfilerSample* samples, uint32 maxCount)
+	{
+		return JPH.JPH_Profiler_GetCallingThreadSamples(samples, maxCount);
+	}
+}
+
 public static class JPH
 {
 	public const float DefaultCollisionTolerance = 1.0e-4f;
@@ -2015,6 +2064,9 @@ public static class JPH
 	public static extern float JPH_VoxelShape_GetConvexRadius(Shape* shape);
 
 	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_RefreshActiveBounds(Shape* shape);
+
+	[CLink, CallingConvention(.Cdecl)]
 	public static extern void JPH_VoxelShape_SetRecordTouchedVoxels(bool enabled);
 
 	[CLink, CallingConvention(.Cdecl)]
@@ -2031,6 +2083,27 @@ public static class JPH
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern uint64 JPH_VoxelShape_GetVoxelIndexFromSubShapeID(Shape* shape, SubShapeID subShapeId);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern bool JPH_Profiler_IsAvailable();
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern bool JPH_Profiler_IsStarted();
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_Profiler_Start(char8* threadName);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_Profiler_NextFrame();
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_Profiler_Dump(char8* tag);
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint64 JPH_Profiler_GetProcessorTicksPerSecond();
+
+	[CLink, CallingConvention(.Cdecl)]
+	public static extern uint32 JPH_Profiler_GetCallingThreadSamples(ProfilerSample* outSamples, uint32 maxCount);
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern float JPH_ConvexShapeSettings_GetDensity(ConvexShapeSettings* shape);
@@ -5511,6 +5584,13 @@ public struct ShapeRef
 	public uint32 GetTouchedVoxels(SubShapeID* outVoxelIndices, uint32 maxCount)
 	{
 		return JPH.JPH_VoxelShape_GetTouchedVoxels(Handle, outVoxelIndices, maxCount);
+	}
+
+	/// Shrinks the shape's bounds onto the voxels that are still solid, so a mined-out rock
+	/// stops presenting the broadphase box it had when it was whole.
+	public void RefreshActiveBounds()
+	{
+		JPH.JPH_VoxelShape_RefreshActiveBounds(Handle);
 	}
 
 	public void ClearTouchedVoxels()

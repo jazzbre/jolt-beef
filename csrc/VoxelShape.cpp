@@ -467,8 +467,51 @@ BoxShape VoxelShape::CreateBoxShape() const
 
 AABox VoxelShape::GetLocalBounds() const
 {
+	// Read without a lock from every collide job, so RefreshActiveBounds is an explicit
+	// call rather than something computed lazily in here.
+	if (mActiveBoundsValid)
+		return mActiveBounds;
+
 	return AABox(-Vec3(float(mSizeX) * mVoxelHalfExtent.GetX(), float(mSizeY) * mVoxelHalfExtent.GetY(), float(mSizeZ) * mVoxelHalfExtent.GetZ()),
 		Vec3(float(mSizeX) * mVoxelHalfExtent.GetX(), float(mSizeY) * mVoxelHalfExtent.GetY(), float(mSizeZ) * mVoxelHalfExtent.GetZ()));
+}
+
+void VoxelShape::RefreshActiveBounds()
+{
+	mActiveBoundsValid = false;
+	if (mSizeX == 0 || mSizeY == 0 || mSizeZ == 0 || mVoxelDataInterface == nullptr)
+		return;
+
+	uint min_x = mSizeX, min_y = mSizeY, min_z = mSizeZ;
+	uint max_x = 0, max_y = 0, max_z = 0;
+	bool any_active = false;
+
+	// Runs rather than voxels: a solid rock reports a handful of spans per row instead of
+	// every cell, so this is closer to the surface area than to the grid volume.
+	auto run_visitor = [&min_x, &min_y, &min_z, &max_x, &max_y, &max_z, &any_active](const VoxelRange &inRun) {
+		any_active = true;
+		min_x = min(min_x, inRun.mMinX);
+		min_y = min(min_y, inRun.mMinY);
+		min_z = min(min_z, inRun.mMinZ);
+		max_x = max(max_x, inRun.mMaxX);
+		max_y = max(max_y, inRun.mMaxY);
+		max_z = max(max_z, inRun.mMaxZ);
+		return true;
+	};
+
+	VoxelRange full_range;
+	full_range.mMaxX = mSizeX;
+	full_range.mMaxY = mSizeY;
+	full_range.mMaxZ = mSizeZ;
+	WalkVoxelRanges(full_range, run_visitor);
+
+	// A grid mined away to nothing keeps the whole-grid bounds rather than an empty box,
+	// which nothing downstream expects to be handed.
+	if (!any_active)
+		return;
+
+	mActiveBounds = GetVoxelRangeLocalBounds(min_x, min_y, min_z, max_x, max_y, max_z);
+	mActiveBoundsValid = true;
 }
 
 MassProperties VoxelShape::GetMassProperties() const
