@@ -800,6 +800,11 @@ void VoxelShape::sCollideVoxelVsShape(const Shape *inShape1, const Shape *inShap
 		}
 		return !ioCollector.ShouldEarlyOut();
 	};
+	// Not filtered by exposed face. GetRequiredExposedFacesForBounds looks like the way to
+	// narrow this, but the direction it derives runs between the two shapes' centres, and
+	// whether a voxel can be reached depends on its own surface orientation. On a hull most
+	// of the contact surface faces some other way, so the near skin gets filtered out and a
+	// craft flies through it and lands on the far side's inner plating.
 	shape1->WalkVoxels(range, visitor, false, 0, &range_filter);
 }
 
@@ -874,6 +879,14 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 	Vec3 inv_inner_scale = Vec3::sOne() / inner_scale;
 	Vec3 outer_separation = separation_distance * inv_outer_scale.Abs();
 	Vec3 inner_separation = separation_distance * inv_inner_scale.Abs();
+
+	// No bounding sphere reject before the dispatch below. It is sound - a box is inside
+	// its circumscribed sphere, so disjoint spheres cannot touch - but it never fires
+	// here. Where the two grids differ in voxel size, and every ship against world pair
+	// does, the coarse voxel is large enough that each fine voxel has a single coarse
+	// candidate and there is nothing to reject. Where the sizes match, a cube's
+	// circumscribed sphere is root three half extents, which reaches the diagonal
+	// neighbour exactly, so the corners sit on the threshold rather than beyond it.
 
 	AABox shared_bounds_in_outer = shared_world_bounds.Transformed(inverse_outer_transform).Scaled(inv_outer_scale);
 	VoxelRange outer_range = outer_shape->GetVoxelRangeOverlappingLocalBounds(shared_bounds_in_outer, true);
