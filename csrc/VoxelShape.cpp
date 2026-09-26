@@ -517,17 +517,19 @@ void VoxelShape::RefreshActiveBounds()
 MassProperties VoxelShape::GetMassProperties() const
 {
 	BoxShape box = CreateBoxShape();
-	MassProperties box_mass = box.GetMassProperties();
-
 	MassProperties total;
-	auto visitor = [this, &box_mass, &total](SubShapeID::Type, Vec3Arg inVoxelCenter) {
-		MassProperties voxel_mass = box_mass;
-		voxel_mass.Translate(inVoxelCenter);
-		total.mMass += voxel_mass.mMass;
-		total.mInertia += voxel_mass.mInertia;
+	auto accumulateRangeMass = [this, &box, &total](const VoxelRange &inRange) {
+		AABox rangeBounds = GetVoxelRangeLocalBounds(inRange.mMinX, inRange.mMinY, inRange.mMinZ,
+			inRange.mMaxX, inRange.mMaxY, inRange.mMaxZ);
+		MassProperties rangeMass;
+		rangeMass.SetMassAndInertiaOfSolidBox(rangeBounds.GetSize(), box.GetDensity());
+		rangeMass.Translate(rangeBounds.GetCenter());
+		total.mMass += rangeMass.mMass;
+		total.mInertia += rangeMass.mInertia;
 		return true;
 	};
-	WalkVoxels(visitor, false);
+	WalkVoxelRanges(VoxelRange { 0, 0, 0, mSizeX, mSizeY, mSizeZ }, accumulateRangeMass);
+	total.mInertia.SetColumn4(3, Vec4(0, 0, 0, 1));
 
 	return total;
 }
