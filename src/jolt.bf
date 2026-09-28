@@ -5395,6 +5395,7 @@ public struct PhysicsWorldConfig
 	public uint32 ObjectLayerCount = 2;
 	public uint32 BroadPhaseLayerCount = 2;
 	public Vec3 Gravity = .(0.0f, -9.81f, 0.0f);
+	public JobSystemConfig* JobSystemConfig = null;
 }
 
 public struct JobSystemHandle
@@ -5404,6 +5405,11 @@ public struct JobSystemHandle
 	public this(JobSystemThreadPoolConfig* config = null)
 	{
 		Handle = JPH.JPH_JobSystemThreadPool_Create(config);
+	}
+
+	public this(JobSystemConfig* config)
+	{
+		Handle = JPH.JPH_JobSystemCallback_Create(config);
 	}
 
 	public void Destroy() mut
@@ -6265,7 +6271,7 @@ public struct PhysicsWorld
 	public this(PhysicsWorldConfig config = .())
 	{
 		Handle = null;
-		JobSystem = .();
+		JobSystem = config.JobSystemConfig != null ? .(config.JobSystemConfig) : .();
 		BroadPhaseLayerInterface = JPH.JPH_BroadPhaseLayerInterfaceTable_Create(config.ObjectLayerCount, config.BroadPhaseLayerCount);
 		ObjectLayerPairFilter = JPH.JPH_ObjectLayerPairFilterTable_Create(config.ObjectLayerCount);
 		BodyInterface = null;
