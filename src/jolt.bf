@@ -1230,6 +1230,8 @@ public struct VoxelShape_Procs
 	public typealias CastRayClosestFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, SubShapeID* outVoxelIndex, float* outFraction);
 	public typealias VisitRayVoxelsFunction = function bool(void* userData, Vec3* origin, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
 	public typealias VisitBoxCastVoxelsFunction = function bool(void* userData, AABox* startBounds, Vec3* direction, float maxFraction, Vec3* voxelHalfExtent, uint32 sizeX, uint32 sizeY, uint32 sizeZ, VisitVoxelFunction visitor, void* visitorUserData);
+	public typealias VisitBrickFunction = function bool(void* userData, uint32 brickX, uint32 brickY, uint32 brickZ, uint64 surfaceMask, uint64 solidMask);
+	public typealias VisitSurfaceBricksFunction = function bool(void* userData, uint32 minX, uint32 minY, uint32 minZ, uint32 maxX, uint32 maxY, uint32 maxZ, ShouldVisitRangeFunction rangeFilter, void* rangeFilterUserData, VisitBrickFunction visitor, void* visitorUserData);
 
 	public IsVoxelActiveFunction IsVoxelActive = null;
 	public VisitActiveVoxelsFunction VisitActiveVoxels = null;
@@ -1238,6 +1240,7 @@ public struct VoxelShape_Procs
 	public CastRayClosestFunction CastRayClosest = null;
 	public VisitRayVoxelsFunction VisitRayVoxels = null;
 	public VisitBoxCastVoxelsFunction VisitBoxCastVoxels = null;
+	public VisitSurfaceBricksFunction VisitSurfaceBricks = null;
 }
 
 [CRepr]
@@ -2065,21 +2068,6 @@ public static class JPH
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern void JPH_VoxelShape_RefreshActiveBounds(Shape* shape);
-
-	[CLink, CallingConvention(.Cdecl)]
-	public static extern void JPH_VoxelShape_SetRecordTouchedVoxels(bool enabled);
-
-	[CLink, CallingConvention(.Cdecl)]
-	public static extern void JPH_VoxelShape_SetDrawTouchedVoxels(bool enabled);
-
-	[CLink, CallingConvention(.Cdecl)]
-	public static extern void JPH_VoxelShape_ClearTouchedVoxels(Shape* shape);
-
-	[CLink, CallingConvention(.Cdecl)]
-	public static extern uint32 JPH_VoxelShape_GetTouchedVoxelCount(Shape* shape);
-
-	[CLink, CallingConvention(.Cdecl)]
-	public static extern uint32 JPH_VoxelShape_GetTouchedVoxels(Shape* shape, SubShapeID* outVoxelIndices, uint32 maxCount);
 
 	[CLink, CallingConvention(.Cdecl)]
 	public static extern uint64 JPH_VoxelShape_GetVoxelIndexFromSubShapeID(Shape* shape, SubShapeID subShapeId);
@@ -5581,26 +5569,11 @@ public struct ShapeRef
 		return .((Shape*)shape);
 	}
 
-	public uint32 GetTouchedVoxelCount()
-	{
-		return JPH.JPH_VoxelShape_GetTouchedVoxelCount(Handle);
-	}
-
-	public uint32 GetTouchedVoxels(SubShapeID* outVoxelIndices, uint32 maxCount)
-	{
-		return JPH.JPH_VoxelShape_GetTouchedVoxels(Handle, outVoxelIndices, maxCount);
-	}
-
 	/// Shrinks the shape's bounds onto the voxels that are still solid, so a mined-out rock
 	/// stops presenting the broadphase box it had when it was whole.
 	public void RefreshActiveBounds()
 	{
 		JPH.JPH_VoxelShape_RefreshActiveBounds(Handle);
-	}
-
-	public void ClearTouchedVoxels()
-	{
-		JPH.JPH_VoxelShape_ClearTouchedVoxels(Handle);
 	}
 
 	public void Destroy() mut

@@ -47,6 +47,11 @@ namespace {
 		JPH::VoxelShapeDataRangeVisitor* mVisitor;
 	};
 
+	struct VoxelBrickVisitorForwarder
+	{
+		JPH::VoxelShapeDataBrickVisitor* mVisitor;
+	};
+
 	static bool JPH_API_CALL VisitVoxelThunk(void* inUserData, uint32_t inX, uint32_t inY, uint32_t inZ, JPH_SubShapeID inVoxelIndex)
 	{
 		VoxelVisitorForwarder* forwarder = static_cast<VoxelVisitorForwarder*>(inUserData);
@@ -57,6 +62,12 @@ namespace {
 	{
 		VoxelRangeVisitorForwarder* forwarder = static_cast<VoxelRangeVisitorForwarder*>(inUserData);
 		return forwarder->mVisitor->VisitRange(inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ);
+	}
+
+	static bool JPH_API_CALL VisitBrickThunk(void* inUserData, uint32_t inBrickX, uint32_t inBrickY, uint32_t inBrickZ, uint64_t inSurfaceMask, uint64_t inSolidMask)
+	{
+		VoxelBrickVisitorForwarder* forwarder = static_cast<VoxelBrickVisitorForwarder*>(inUserData);
+		return forwarder->mVisitor->VisitBrick(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask);
 	}
 
 	static bool JPH_API_CALL ShouldVisitRangeThunk(void* inUserData, uint32_t inMinX, uint32_t inMinY, uint32_t inMinZ, uint32_t inMaxX, uint32_t inMaxY, uint32_t inMaxZ)
@@ -94,6 +105,12 @@ namespace {
 		{
 			VoxelRangeVisitorForwarder forwarder{ &ioVisitor };
 			return mProcs.VisitActiveVoxelRanges(mUserData, inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ, inRequiredExposedFaces, inRangeFilter != nullptr ? ShouldVisitRangeThunk : nullptr, const_cast<JPH::VoxelShapeDataRangeFilter*>(inRangeFilter), VisitRangeThunk, &forwarder);
+		}
+
+		virtual bool VisitSurfaceBricks(JPH::uint inMinX, JPH::uint inMinY, JPH::uint inMinZ, JPH::uint inMaxX, JPH::uint inMaxY, JPH::uint inMaxZ, JPH::VoxelShapeDataBrickVisitor& ioVisitor, const JPH::VoxelShapeDataRangeFilter* inRangeFilter = nullptr) const override
+		{
+			VoxelBrickVisitorForwarder forwarder{ &ioVisitor };
+			return mProcs.VisitSurfaceBricks(mUserData, inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ, inRangeFilter != nullptr ? ShouldVisitRangeThunk : nullptr, const_cast<JPH::VoxelShapeDataRangeFilter*>(inRangeFilter), VisitBrickThunk, &forwarder);
 		}
 
 		virtual bool CastRayClosest(const JPH::RayCast& inRay, float inMaxFraction, JPH::Vec3Arg inVoxelHalfExtent, JPH::uint inSizeX, JPH::uint inSizeY, JPH::uint inSizeZ, JPH::SubShapeID::Type& outVoxelIndex, float& outFraction) const override
@@ -143,7 +160,8 @@ namespace {
 			&& inProcs->VisitActiveVoxelRanges != nullptr
 			&& inProcs->CastRayClosest != nullptr
 			&& inProcs->VisitRayVoxels != nullptr
-			&& inProcs->VisitBoxCastVoxels != nullptr;
+			&& inProcs->VisitBoxCastVoxels != nullptr
+			&& inProcs->VisitSurfaceBricks != nullptr;
 	}
 
 	static const JPH::VoxelShape* AsVoxelShape(const JPH_Shape* inShape)
@@ -222,66 +240,6 @@ void JPH_VoxelShape_RefreshActiveBounds(JPH_Shape* inShape)
 	JPH::VoxelShape* shape = const_cast<JPH::VoxelShape*>(AsVoxelShape(inShape));
 	if (shape != nullptr)
 		shape->RefreshActiveBounds();
-}
-
-void JPH_VoxelShape_SetRecordTouchedVoxels(bool inEnabled)
-{
-#ifdef JPH_DEBUG_RENDERER
-	JPH::VoxelShape::sRecordTouchedVoxels = inEnabled;
-#else
-	JPH_UNUSED(inEnabled);
-#endif
-}
-
-void JPH_VoxelShape_SetDrawTouchedVoxels(bool inEnabled)
-{
-#ifdef JPH_DEBUG_RENDERER
-	JPH::VoxelShape::sDrawTouchedVoxels = inEnabled;
-#else
-	JPH_UNUSED(inEnabled);
-#endif
-}
-
-void JPH_VoxelShape_ClearTouchedVoxels(const JPH_Shape* inShape)
-{
-#ifdef JPH_DEBUG_RENDERER
-	const JPH::VoxelShape* shape = AsVoxelShape(inShape);
-	if (shape != nullptr)
-		shape->ClearTouchedVoxels();
-#else
-	JPH_UNUSED(inShape);
-#endif
-}
-
-uint32_t JPH_VoxelShape_GetTouchedVoxelCount(const JPH_Shape* inShape)
-{
-#ifdef JPH_DEBUG_RENDERER
-	const JPH::VoxelShape* shape = AsVoxelShape(inShape);
-	return shape != nullptr ? uint32_t(shape->GetTouchedVoxels().size()) : 0;
-#else
-	JPH_UNUSED(inShape);
-	return 0;
-#endif
-}
-
-uint32_t JPH_VoxelShape_GetTouchedVoxels(const JPH_Shape* inShape, JPH_SubShapeID* outVoxelIndices, uint32_t inMaxCount)
-{
-#ifdef JPH_DEBUG_RENDERER
-	const JPH::VoxelShape* shape = AsVoxelShape(inShape);
-	if (shape == nullptr || outVoxelIndices == nullptr || inMaxCount == 0)
-		return 0;
-
-	const JPH::Array<JPH::SubShapeID::Type>& touched_voxels = shape->GetTouchedVoxels();
-	uint32_t count = JPH::min(uint32_t(touched_voxels.size()), inMaxCount);
-	for (uint32_t i = 0; i < count; ++i)
-		outVoxelIndices[i] = touched_voxels[i];
-	return count;
-#else
-	JPH_UNUSED(inShape);
-	JPH_UNUSED(outVoxelIndices);
-	JPH_UNUSED(inMaxCount);
-	return 0;
-#endif
 }
 
 uint64_t JPH_VoxelShape_GetVoxelIndexFromSubShapeID(const JPH_Shape* inShape, JPH_SubShapeID inSubShapeID) {

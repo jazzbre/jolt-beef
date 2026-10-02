@@ -20,8 +20,6 @@
 JPH_NAMESPACE_BEGIN
 
 #ifdef JPH_DEBUG_RENDERER
-bool VoxelShape::sRecordTouchedVoxels = false;
-bool VoxelShape::sDrawTouchedVoxels = true;
 #endif // JPH_DEBUG_RENDERER
 
 static const Vec3 sUnitBoxTriangles[] = {
@@ -142,6 +140,11 @@ public:
 		return mFilter.ShouldCollide(MapShape(inShape1), inSubShapeIDOfShape1, MapShape(inShape2), inSubShapeIDOfShape2);
 	}
 
+	void				SetBoxShape(const BoxShape *inBoxShape)
+	{
+		mBoxShape = inBoxShape;
+	}
+
 private:
 	const Shape *		MapShape(const Shape *inShape) const
 	{
@@ -161,6 +164,67 @@ struct VoxelShape::VoxelRange
 	uint				mMaxX = 0;
 	uint				mMaxY = 0;
 	uint				mMaxZ = 0;
+};
+
+struct VoxelShape::BrickBox
+{
+	uint				mMinX = 0;
+	uint				mMinY = 0;
+	uint				mMinZ = 0;
+	uint				mMaxX = 0;
+	uint				mMaxY = 0;
+	uint				mMaxZ = 0;
+};
+
+static constexpr uint cBrickSize = 4;
+static constexpr uint cMaxBrickBoxes = 64;
+
+struct VoxelShape::BrickBoxContactSide
+{
+	const VoxelShape *	mShape = nullptr;
+	Mat44				mInverseCenterOfMassTransform;
+	Vec3				mInverseScale;
+	SubShapeIDCreator	mSubShapeIDCreator;
+	const BrickBox *	mBox = nullptr;
+
+	SubShapeID			Resolve(Vec3Arg inContactPoint) const
+	{
+		Vec3 local_point = (mInverseCenterOfMassTransform * inContactPoint) * mInverseScale;
+		return mShape->MakeVoxelSubShapeIDCreator(mSubShapeIDCreator, mShape->GetVoxelIndexInBrickBox(*mBox, local_point)).GetID();
+	}
+};
+
+/// Box shapes stand in for several voxels at once, so each hit is given the sub shape ID of
+/// the voxel in the box nearest its contact point before it reaches the real collector.
+class VoxelShape::BrickBoxHitCollector final : public CollideShapeCollector
+{
+public:
+						BrickBoxHitCollector(CollideShapeCollector &ioTarget, const BrickBoxContactSide &inSide1, const BrickBoxContactSide &inSide2) :
+		CollideShapeCollector(ioTarget),
+		mTarget(ioTarget),
+		mSide1(inSide1),
+		mSide2(inSide2)
+	{
+	}
+
+	virtual void		AddHit(const CollideShapeResult &inResult) override
+	{
+		CollideShapeResult result = inResult;
+		if (mSide1.mShape != nullptr)
+			result.mSubShapeID1 = mSide1.Resolve(inResult.mContactPointOn1);
+		if (mSide2.mShape != nullptr)
+			result.mSubShapeID2 = mSide2.Resolve(inResult.mContactPointOn2);
+		mTarget.AddHit(result);
+		if (mTarget.ShouldEarlyOut())
+			ForceEarlyOut();
+		else if (mTarget.GetEarlyOutFraction() < GetEarlyOutFraction())
+			UpdateEarlyOutFraction(mTarget.GetEarlyOutFraction());
+	}
+
+private:
+	CollideShapeCollector &mTarget;
+	const BrickBoxContactSide &mSide1;
+	const BrickBoxContactSide &mSide2;
 };
 
 struct VoxelShape::GetTrianglesContextVoxel
@@ -188,10 +252,9 @@ template <class Visitor>
 class VoxelDataVisitorAdapter final : public VoxelShapeDataVisitor
 {
 public:
-						VoxelDataVisitorAdapter(const VoxelShape *inShape, Visitor &ioVisitor, bool inRecordTouchedVoxels) :
+						VoxelDataVisitorAdapter(const VoxelShape *inShape, Visitor &ioVisitor) :
 		mShape(inShape),
-		mVisitor(ioVisitor),
-		mRecordTouchedVoxels(inRecordTouchedVoxels)
+		mVisitor(ioVisitor)
 	{
 	}
 
@@ -200,14 +263,12 @@ public:
 		if (inX >= mShape->GetSizeX() || inY >= mShape->GetSizeY() || inZ >= mShape->GetSizeZ())
 			return true;
 
-		JPH_IF_DEBUG_RENDERER(if (mRecordTouchedVoxels) mShape->RecordTouchedVoxel(inVoxelIndex);)
 		return mVisitor(inVoxelIndex, mShape->GetVoxelCenter(inX, inY, inZ));
 	}
 
 private:
 	const VoxelShape *	mShape;
 	Visitor &			mVisitor;
-	bool				mRecordTouchedVoxels;
 };
 
 template <class Visitor>
@@ -228,6 +289,101 @@ private:
 	Visitor &			mVisitor;
 };
 
+template <class Visitor>
+class VoxelDataBrickVisitorAdapter final : public VoxelShapeDataBrickVisitor
+{
+public:
+						VoxelDataBrickVisitorAdapter(Visitor &ioVisitor) :
+		mVisitor(ioVisitor)
+	{
+	}
+
+	virtual bool		VisitBrick(uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) override
+	{
+		return mVisitor(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask);
+	}
+
+private:
+	Visitor &			mVisitor;
+};
+
+static uint CountTrailingZeros64(uint64 inValue)
+{
+	uint32 low = uint32(inValue);
+	return low != 0? CountTrailingZeros(low) : 32 + CountTrailingZeros(uint32(inValue >> 32));
+}
+
+uint VoxelShape::sDecomposeBrick(uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask, BrickBox *outBoxes)
+{
+	auto block_mask = [](const uint *inMin, const uint *inMax) {
+		uint64 mask = 0;
+		uint64 row = uint64((1u << inMax[0]) - (1u << inMin[0]));
+		for (uint z = inMin[2]; z < inMax[2]; ++z)
+			for (uint y = inMin[1]; y < inMax[1]; ++y)
+				mask |= row << (y * cBrickSize + z * cBrickSize * cBrickSize);
+		return mask;
+	};
+
+	uint box_count = 0;
+	uint64 remaining = inSurfaceMask & inSolidMask;
+	uint64 unclaimed = inSolidMask;
+	while (remaining != 0)
+	{
+		uint first_bit = CountTrailingZeros64(remaining);
+		uint min[3] = { first_bit % cBrickSize, (first_bit / cBrickSize) % cBrickSize, first_bit / (cBrickSize * cBrickSize) };
+		uint max[3] = { min[0] + 1, min[1] + 1, min[2] + 1 };
+
+		// Growing through hidden solid voxels as well keeps the boxes thick, so a deep
+		// penetration still resolves out of the hull rather than through a thin slab.
+		// Boxes must not overlap: each contact is reported against the box voxel nearest
+		// to it, and two boxes naming the same voxel give Jolt a duplicate manifold key.
+		for (uint axis = 0; axis < 3; ++axis)
+		{
+			for (;;)
+			{
+				uint slice_min[3] = { min[0], min[1], min[2] };
+				uint slice_max[3] = { max[0], max[1], max[2] };
+				if (max[axis] < cBrickSize)
+				{
+					slice_min[axis] = max[axis];
+					slice_max[axis] = max[axis] + 1;
+					uint64 slice = block_mask(slice_min, slice_max);
+					if ((unclaimed & slice) == slice)
+					{
+						++max[axis];
+						continue;
+					}
+				}
+				break;
+			}
+			for (;;)
+			{
+				uint slice_min[3] = { min[0], min[1], min[2] };
+				uint slice_max[3] = { max[0], max[1], max[2] };
+				if (min[axis] > 0)
+				{
+					slice_min[axis] = min[axis] - 1;
+					slice_max[axis] = min[axis];
+					uint64 slice = block_mask(slice_min, slice_max);
+					if ((unclaimed & slice) == slice)
+					{
+						--min[axis];
+						continue;
+					}
+				}
+				break;
+			}
+		}
+
+		uint origin_x = inBrickX * cBrickSize, origin_y = inBrickY * cBrickSize, origin_z = inBrickZ * cBrickSize;
+		outBoxes[box_count++] = BrickBox { origin_x + min[0], origin_y + min[1], origin_z + min[2], origin_x + max[0], origin_y + max[1], origin_z + max[2] };
+		uint64 claimed = block_mask(min, max);
+		remaining &= ~claimed;
+		unclaimed &= ~claimed;
+	}
+	return box_count;
+}
+
 uint VoxelShape::sCalculateVoxelIndexBits(uint inSizeX, uint inSizeY, uint inSizeZ)
 {
 	uint64 num_voxels = uint64(inSizeX) * uint64(inSizeY) * uint64(inSizeZ);
@@ -236,19 +392,19 @@ uint VoxelShape::sCalculateVoxelIndexBits(uint inSizeX, uint inSizeY, uint inSiz
 }
 
 template <class Visitor>
-void VoxelShape::WalkVoxels(Visitor &ioVisitor, bool inRecordTouchedVoxels) const
+void VoxelShape::WalkVoxels(Visitor &ioVisitor) const
 {
-	WalkVoxels(VoxelRange { 0, 0, 0, mSizeX, mSizeY, mSizeZ }, ioVisitor, inRecordTouchedVoxels);
+	WalkVoxels(VoxelRange { 0, 0, 0, mSizeX, mSizeY, mSizeZ }, ioVisitor);
 }
 
 template <class Visitor>
-void VoxelShape::WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, [[maybe_unused]] bool inRecordTouchedVoxels, uint inRequiredExposedFaces, const VoxelShapeDataRangeFilter *inRangeFilter) const
+void VoxelShape::WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, uint inRequiredExposedFaces, const VoxelShapeDataRangeFilter *inRangeFilter) const
 {
 	JPH_ASSERT(mVoxelDataInterface != nullptr);
 	if (mVoxelDataInterface == nullptr)
 		return;
 
-	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor, inRecordTouchedVoxels);
+	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor);
 	mVoxelDataInterface->VisitActiveVoxels(inRange.mMinX, inRange.mMinY, inRange.mMinZ, inRange.mMaxX, inRange.mMaxY, inRange.mMaxZ, inRequiredExposedFaces, visitor, inRangeFilter);
 }
 
@@ -264,6 +420,17 @@ void VoxelShape::WalkVoxelRanges(const VoxelRange &inRange, Visitor &ioVisitor, 
 }
 
 template <class Visitor>
+void VoxelShape::WalkSurfaceBricks(const VoxelRange &inRange, Visitor &ioVisitor, const VoxelShapeDataRangeFilter *inRangeFilter) const
+{
+	JPH_ASSERT(mVoxelDataInterface != nullptr);
+	if (mVoxelDataInterface == nullptr || inRange.mMinX >= inRange.mMaxX || inRange.mMinY >= inRange.mMaxY || inRange.mMinZ >= inRange.mMaxZ)
+		return;
+
+	VoxelDataBrickVisitorAdapter<Visitor> visitor(ioVisitor);
+	mVoxelDataInterface->VisitSurfaceBricks(inRange.mMinX, inRange.mMinY, inRange.mMinZ, inRange.mMaxX, inRange.mMaxY, inRange.mMaxZ, visitor, inRangeFilter);
+}
+
+template <class Visitor>
 void VoxelShape::WalkRayVoxels(const RayCast &inRay, float inMaxFraction, Visitor &ioVisitor) const
 {
 	if (mSizeX == 0 || mSizeY == 0 || mSizeZ == 0 || inMaxFraction < 0.0f)
@@ -273,7 +440,7 @@ void VoxelShape::WalkRayVoxels(const RayCast &inRay, float inMaxFraction, Visito
 	if (mVoxelDataInterface == nullptr)
 		return;
 
-	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor, true);
+	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor);
 	mVoxelDataInterface->VisitRayVoxels(inRay, inMaxFraction, mVoxelHalfExtent, mSizeX, mSizeY, mSizeZ, visitor);
 }
 
@@ -287,7 +454,7 @@ void VoxelShape::WalkBoxCastVoxels(const AABox &inStartBounds, Vec3Arg inDirecti
 	if (mVoxelDataInterface == nullptr)
 		return;
 
-	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor, true);
+	VoxelDataVisitorAdapter<Visitor> visitor(this, ioVisitor);
 	mVoxelDataInterface->VisitBoxCastVoxels(inStartBounds, inDirection, inMaxFraction, mVoxelHalfExtent, mSizeX, mSizeY, mSizeZ, visitor);
 }
 
@@ -440,20 +607,6 @@ Vec3 VoxelShape::GetVoxelCenter(uint inX, uint inY, uint inZ) const
 	return Vec3((float(2 * inX + 1) - float(mSizeX)) * mVoxelHalfExtent.GetX(), (float(2 * inY + 1) - float(mSizeY)) * mVoxelHalfExtent.GetY(), (float(2 * inZ + 1) - float(mSizeZ)) * mVoxelHalfExtent.GetZ());
 }
 
-#ifdef JPH_DEBUG_RENDERER
-void VoxelShape::RecordTouchedVoxel(SubShapeID::Type inVoxelIndex) const
-{
-	if (!sRecordTouchedVoxels)
-		return;
-
-	for (SubShapeID::Type voxel_index : mTouchedVoxels)
-		if (voxel_index == inVoxelIndex)
-			return;
-
-	mTouchedVoxels.push_back(inVoxelIndex);
-}
-#endif // JPH_DEBUG_RENDERER
-
 SubShapeIDCreator VoxelShape::MakeVoxelSubShapeIDCreator(const SubShapeIDCreator &inSubShapeIDCreator, SubShapeID::Type inVoxelIndex) const
 {
 	JPH_ASSERT(inSubShapeIDCreator.GetNumBitsWritten() + mVoxelIndexBits <= SubShapeID::MaxBits);
@@ -463,6 +616,40 @@ SubShapeIDCreator VoxelShape::MakeVoxelSubShapeIDCreator(const SubShapeIDCreator
 BoxShape VoxelShape::CreateBoxShape() const
 {
 	return BoxShape(mVoxelHalfExtent, mConvexRadius);
+}
+
+AABox VoxelShape::GetBrickLocalBounds(uint inBrickX, uint inBrickY, uint inBrickZ) const
+{
+	return GetVoxelRangeLocalBounds(inBrickX * cBrickSize, inBrickY * cBrickSize, inBrickZ * cBrickSize,
+		min((inBrickX + 1) * cBrickSize, mSizeX), min((inBrickY + 1) * cBrickSize, mSizeY), min((inBrickZ + 1) * cBrickSize, mSizeZ));
+}
+
+AABox VoxelShape::GetBrickBoxLocalBounds(const BrickBox &inBox) const
+{
+	return GetVoxelRangeLocalBounds(inBox.mMinX, inBox.mMinY, inBox.mMinZ, inBox.mMaxX, inBox.mMaxY, inBox.mMaxZ);
+}
+
+BoxShape VoxelShape::CreateBrickBoxShape(const AABox &inLocalBounds) const
+{
+	Vec3 half_extent = inLocalBounds.GetExtent();
+	return BoxShape(half_extent, min(mConvexRadius, half_extent.ReduceMin()));
+}
+
+SubShapeID::Type VoxelShape::GetVoxelIndexInBrickBox(const BrickBox &inBox, Vec3Arg inLocalPoint) const
+{
+	auto voxel_coordinate = [](float inPosition, float inHalfExtent, uint inSize, uint inMin, uint inMax) {
+		int coordinate = int(floor((inPosition + float(inSize) * inHalfExtent) / (2.0f * inHalfExtent)));
+		return uint(Clamp(coordinate, int(inMin), int(inMax) - 1));
+	};
+	uint x = voxel_coordinate(inLocalPoint.GetX(), mVoxelHalfExtent.GetX(), mSizeX, inBox.mMinX, inBox.mMaxX);
+	uint y = voxel_coordinate(inLocalPoint.GetY(), mVoxelHalfExtent.GetY(), mSizeY, inBox.mMinY, inBox.mMaxY);
+	uint z = voxel_coordinate(inLocalPoint.GetZ(), mVoxelHalfExtent.GetZ(), mSizeZ, inBox.mMinZ, inBox.mMaxZ);
+	return x + y * mSizeX + z * mSizeX * mSizeY;
+}
+
+SubShapeID::Type VoxelShape::GetFirstVoxelIndex(const BrickBox &inBox) const
+{
+	return inBox.mMinX + inBox.mMinY * mSizeX + inBox.mMinZ * mSizeX * mSizeY;
 }
 
 AABox VoxelShape::GetLocalBounds() const
@@ -606,12 +793,7 @@ void VoxelShape::Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransfo
 		box.Draw(inRenderer, inCenterOfMassTransform.PreTranslated(inScale * inVoxelCenter), inScale, inColor, inUseMaterialColors, inDrawWireframe);
 		return true;
 	};
-	WalkVoxels(visitor, false);
-
-	if (sDrawTouchedVoxels)
-		for (SubShapeID::Type voxel_index : mTouchedVoxels)
-			if (IsVoxelActive(voxel_index))
-				box.Draw(inRenderer, inCenterOfMassTransform.PreTranslated(inScale * GetVoxelCenter(voxel_index)), inScale, Color::sYellow, false, true);
+	WalkVoxels(visitor);
 }
 #endif // JPH_DEBUG_RENDERER
 
@@ -628,7 +810,6 @@ bool VoxelShape::CastRay(const RayCast &inRay, const SubShapeIDCreator &inSubSha
 	{
 		ioHit.mFraction = fraction;
 		ioHit.mSubShapeID2 = MakeVoxelSubShapeIDCreator(inSubShapeIDCreator, voxel_index).GetID();
-		JPH_IF_DEBUG_RENDERER(RecordTouchedVoxel(voxel_index);)
 		return true;
 	}
 
@@ -765,7 +946,7 @@ Shape::Stats VoxelShape::GetStats() const
 		++num_active;
 		return true;
 	};
-	WalkVoxels(visitor, false);
+	WalkVoxels(visitor);
 	return Stats(sizeof(*this), 12 * num_active);
 }
 
@@ -776,7 +957,7 @@ float VoxelShape::GetVolume() const
 		++num_active;
 		return true;
 	};
-	WalkVoxels(visitor, false);
+	WalkVoxels(visitor);
 	return num_active * 8.0f * mVoxelHalfExtent.GetX() * mVoxelHalfExtent.GetY() * mVoxelHalfExtent.GetZ();
 }
 
@@ -787,27 +968,43 @@ void VoxelShape::sCollideVoxelVsShape(const Shape *inShape1, const Shape *inShap
 	JPH_ASSERT(inShape1->GetSubType() == EShapeSubType::User1);
 	const VoxelShape *shape1 = static_cast<const VoxelShape *>(inShape1);
 
-	BoxShape box = shape1->CreateBoxShape();
-	VoxelShapeFilter shape_filter(inShapeFilter, shape1, &box);
+	VoxelShapeFilter shape_filter(inShapeFilter, shape1, nullptr);
 	AABox shape2_bounds = inShape2->GetLocalBounds().Scaled(inScale2).Transformed(inCenterOfMassTransform1.InversedRotationTranslation() * inCenterOfMassTransform2).Scaled(Vec3::sOne() / inScale1);
 	AABox shape2_world_bounds = inShape2->GetWorldSpaceBounds(inCenterOfMassTransform2, inScale2);
 	VoxelRange range = shape1->GetVoxelRangeOverlappingLocalBounds(shape2_bounds);
 	WorldBoundsVoxelRangeFilter range_filter(shape1, inScale1, inCenterOfMassTransform1, shape2_world_bounds);
-	auto visitor = [shape1, &box, inShape2, inScale1, inScale2, inCenterOfMassTransform1, inCenterOfMassTransform2, &shape2_world_bounds, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter](SubShapeID::Type inVoxelIndex, Vec3Arg inVoxelCenter) {
-		Mat44 voxel_transform = inCenterOfMassTransform1.PreTranslated(inScale1 * inVoxelCenter);
-		if (box.GetWorldSpaceBounds(voxel_transform, inScale1).Overlaps(shape2_world_bounds))
+	BrickBoxContactSide voxel_side { shape1, inCenterOfMassTransform1.InversedRotationTranslation(), Vec3::sOne() / inScale1, inSubShapeIDCreator1 };
+	BrickBoxContactSide other_side;
+	BrickBox boxes[cMaxBrickBoxes];
+	auto brick_visitor = [&](uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) {
+		if (!shape1->GetBrickLocalBounds(inBrickX, inBrickY, inBrickZ).Scaled(inScale1).Transformed(inCenterOfMassTransform1).Overlaps(shape2_world_bounds))
+			return true;
+
+		uint box_count = sDecomposeBrick(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask, boxes);
+		for (uint box_index = 0; box_index < box_count; ++box_index)
 		{
-			JPH_IF_DEBUG_RENDERER(shape1->RecordTouchedVoxel(inVoxelIndex);)
-			CollisionDispatch::sCollideShapeVsShape(&box, inShape2, inScale1, inScale2, voxel_transform, inCenterOfMassTransform2, shape1->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator1, inVoxelIndex), inSubShapeIDCreator2, inCollideShapeSettings, ioCollector, shape_filter);
+			const BrickBox &brick_box = boxes[box_index];
+			AABox local_bounds = shape1->GetBrickBoxLocalBounds(brick_box);
+			if (!local_bounds.Scaled(inScale1).Transformed(inCenterOfMassTransform1).Overlaps(shape2_world_bounds))
+				continue;
+
+			BoxShape box = shape1->CreateBrickBoxShape(local_bounds);
+			shape_filter.SetBoxShape(&box);
+			voxel_side.mBox = &brick_box;
+			BrickBoxHitCollector collector(ioCollector, voxel_side, other_side);
+			Mat44 box_transform = inCenterOfMassTransform1.PreTranslated(inScale1 * local_bounds.GetCenter());
+			CollisionDispatch::sCollideShapeVsShape(&box, inShape2, inScale1, inScale2, box_transform, inCenterOfMassTransform2, shape1->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator1, shape1->GetFirstVoxelIndex(brick_box)), inSubShapeIDCreator2, inCollideShapeSettings, collector, shape_filter);
+			if (ioCollector.ShouldEarlyOut())
+				return false;
 		}
-		return !ioCollector.ShouldEarlyOut();
+		return true;
 	};
 	// Not filtered by exposed face. GetRequiredExposedFacesForBounds looks like the way to
 	// narrow this, but the direction it derives runs between the two shapes' centres, and
 	// whether a voxel can be reached depends on its own surface orientation. On a hull most
 	// of the contact surface faces some other way, so the near skin gets filtered out and a
 	// craft flies through it and lands on the far side's inner plating.
-	shape1->WalkVoxels(range, visitor, false, 0, &range_filter);
+	shape1->WalkSurfaceBricks(range, brick_visitor, &range_filter);
 }
 
 void VoxelShape::sCollideShapeVsVoxel(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
@@ -817,22 +1014,38 @@ void VoxelShape::sCollideShapeVsVoxel(const Shape *inShape1, const Shape *inShap
 	JPH_ASSERT(inShape2->GetSubType() == EShapeSubType::User1);
 	const VoxelShape *shape2 = static_cast<const VoxelShape *>(inShape2);
 
-	BoxShape box = shape2->CreateBoxShape();
-	VoxelShapeFilter shape_filter(inShapeFilter, shape2, &box);
+	VoxelShapeFilter shape_filter(inShapeFilter, shape2, nullptr);
 	AABox shape1_bounds = inShape1->GetLocalBounds().Scaled(inScale1).Transformed(inCenterOfMassTransform2.InversedRotationTranslation() * inCenterOfMassTransform1).Scaled(Vec3::sOne() / inScale2);
 	AABox shape1_world_bounds = inShape1->GetWorldSpaceBounds(inCenterOfMassTransform1, inScale1);
 	VoxelRange range = shape2->GetVoxelRangeOverlappingLocalBounds(shape1_bounds);
 	WorldBoundsVoxelRangeFilter range_filter(shape2, inScale2, inCenterOfMassTransform2, shape1_world_bounds);
-	auto visitor = [shape2, inShape1, &box, inScale1, inScale2, inCenterOfMassTransform1, inCenterOfMassTransform2, &shape1_world_bounds, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter](SubShapeID::Type inVoxelIndex, Vec3Arg inVoxelCenter) {
-		Mat44 voxel_transform = inCenterOfMassTransform2.PreTranslated(inScale2 * inVoxelCenter);
-		if (box.GetWorldSpaceBounds(voxel_transform, inScale2).Overlaps(shape1_world_bounds))
+	BrickBoxContactSide voxel_side { shape2, inCenterOfMassTransform2.InversedRotationTranslation(), Vec3::sOne() / inScale2, inSubShapeIDCreator2 };
+	BrickBoxContactSide other_side;
+	BrickBox boxes[cMaxBrickBoxes];
+	auto brick_visitor = [&](uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) {
+		if (!shape2->GetBrickLocalBounds(inBrickX, inBrickY, inBrickZ).Scaled(inScale2).Transformed(inCenterOfMassTransform2).Overlaps(shape1_world_bounds))
+			return true;
+
+		uint box_count = sDecomposeBrick(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask, boxes);
+		for (uint box_index = 0; box_index < box_count; ++box_index)
 		{
-			JPH_IF_DEBUG_RENDERER(shape2->RecordTouchedVoxel(inVoxelIndex);)
-			CollisionDispatch::sCollideShapeVsShape(inShape1, &box, inScale1, inScale2, inCenterOfMassTransform1, voxel_transform, inSubShapeIDCreator1, shape2->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator2, inVoxelIndex), inCollideShapeSettings, ioCollector, shape_filter);
+			const BrickBox &brick_box = boxes[box_index];
+			AABox local_bounds = shape2->GetBrickBoxLocalBounds(brick_box);
+			if (!local_bounds.Scaled(inScale2).Transformed(inCenterOfMassTransform2).Overlaps(shape1_world_bounds))
+				continue;
+
+			BoxShape box = shape2->CreateBrickBoxShape(local_bounds);
+			shape_filter.SetBoxShape(&box);
+			voxel_side.mBox = &brick_box;
+			BrickBoxHitCollector collector(ioCollector, other_side, voxel_side);
+			Mat44 box_transform = inCenterOfMassTransform2.PreTranslated(inScale2 * local_bounds.GetCenter());
+			CollisionDispatch::sCollideShapeVsShape(inShape1, &box, inScale1, inScale2, inCenterOfMassTransform1, box_transform, inSubShapeIDCreator1, shape2->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator2, shape2->GetFirstVoxelIndex(brick_box)), inCollideShapeSettings, collector, shape_filter);
+			if (ioCollector.ShouldEarlyOut())
+				return false;
 		}
-		return !ioCollector.ShouldEarlyOut();
+		return true;
 	};
-	shape2->WalkVoxels(range, visitor, false, 0, &range_filter);
+	shape2->WalkSurfaceBricks(range, brick_visitor, &range_filter);
 }
 
 void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShape2, Vec3Arg inScale1, Vec3Arg inScale2, Mat44Arg inCenterOfMassTransform1, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, const CollideShapeSettings &inCollideShapeSettings, CollideShapeCollector &ioCollector, const ShapeFilter &inShapeFilter)
@@ -844,11 +1057,6 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 	const VoxelShape *shape1 = static_cast<const VoxelShape *>(inShape1);
 	const VoxelShape *shape2 = static_cast<const VoxelShape *>(inShape2);
 
-	// Only voxels inside the region the two grids share can ever touch, and finding that
-	// region costs six floats. Clipping to it up front is what keeps a pair whose hulls
-	// are metres apart from walking either grid at all. The filter this replaces proved
-	// the same thing by querying the other grid once per row of the overlap, which is
-	// precisely the query that cannot early out when there is nothing there to find.
 	Vec3 separation_distance = Vec3::sReplicate(max(inCollideShapeSettings.mMaxSeparationDistance, 0.0f));
 	AABox world_bounds1 = shape1->GetWorldSpaceBounds(inCenterOfMassTransform1, inScale1);
 	AABox world_bounds2 = shape2->GetWorldSpaceBounds(inCenterOfMassTransform2, inScale2);
@@ -858,14 +1066,9 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 	if (!shared_world_bounds.IsValid())
 		return;
 
-	BoxShape box1 = shape1->CreateBoxShape();
-	BoxShape box2 = shape2->CreateBoxShape();
-	VoxelShapeFilter shape_filter1(inShapeFilter, shape1, &box1);
-	VoxelShapeFilter shape_filter2(shape_filter1, shape2, &box2);
+	VoxelShapeFilter shape_filter1(inShapeFilter, shape1, nullptr);
+	VoxelShapeFilter shape_filter2(shape_filter1, shape2, nullptr);
 
-	// The outer walk pays a row per voxel row of the shared region, so the coarser grid
-	// belongs on the outside. The finer one is reached once per run of adjacent voxels
-	// instead, which is where the crossings into the voxel data now go.
 	bool shape1_outside = shape1->mVoxelHalfExtent.ReduceMin() >= shape2->mVoxelHalfExtent.ReduceMin();
 	const VoxelShape *outer_shape = shape1_outside? shape1 : shape2;
 	const VoxelShape *inner_shape = shape1_outside? shape2 : shape1;
@@ -882,70 +1085,83 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 	Vec3 outer_separation = separation_distance * inv_outer_scale.Abs();
 	Vec3 inner_separation = separation_distance * inv_inner_scale.Abs();
 
-	// No bounding sphere reject before the dispatch below. It is sound - a box is inside
-	// its circumscribed sphere, so disjoint spheres cannot touch - but it never fires
-	// here. Where the two grids differ in voxel size, and every ship against world pair
-	// does, the coarse voxel is large enough that each fine voxel has a single coarse
-	// candidate and there is nothing to reject. Where the sizes match, a cube's
-	// circumscribed sphere is root three half extents, which reaches the diagonal
-	// neighbour exactly, so the corners sit on the threshold rather than beyond it.
-
 	AABox shared_bounds_in_outer = shared_world_bounds.Transformed(inverse_outer_transform).Scaled(inv_outer_scale);
 	VoxelRange outer_range = outer_shape->GetVoxelRangeOverlappingLocalBounds(shared_bounds_in_outer, true);
 	WorldBoundsVoxelRangeFilter outer_range_filter(outer_shape, outer_scale, outer_transform, shared_world_bounds);
 
-	auto run_visitor = [shape1, shape2, outer_shape, inner_shape, &box1, &box2, inScale1, inScale2, outer_scale, inner_scale, outer_transform, inner_transform, outer_to_inner, inner_to_outer, inv_outer_scale, inv_inner_scale, outer_separation, inner_separation, shape1_outside, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter2](const VoxelRange &inRun) {
-		// WalkVoxelRanges only emits runs whose every voxel is a collision candidate, so
-		// the whole run maps across in one go. That is one crossing into the other grid
-		// per run rather than per voxel, and it also removes the second walk the old code
-		// needed to recover voxels the range walk had already found.
-		AABox run_bounds_in_inner = outer_shape->GetVoxelRangeLocalBounds(inRun.mMinX, inRun.mMinY, inRun.mMinZ, inRun.mMaxX, inRun.mMaxY, inRun.mMaxZ).Scaled(outer_scale).Transformed(outer_to_inner).Scaled(inv_inner_scale);
-		run_bounds_in_inner.ExpandBy(inner_separation);
-		VoxelRange inner_range = inner_shape->GetVoxelRangeOverlappingLocalBounds(run_bounds_in_inner, true);
+	BrickBoxContactSide side1 { shape1, inCenterOfMassTransform1.InversedRotationTranslation(), Vec3::sOne() / inScale1, inSubShapeIDCreator1 };
+	BrickBoxContactSide side2 { shape2, inCenterOfMassTransform2.InversedRotationTranslation(), Vec3::sOne() / inScale2, inSubShapeIDCreator2 };
+	BrickBoxContactSide &outer_side = shape1_outside? side1 : side2;
+	BrickBoxContactSide &inner_side = shape1_outside? side2 : side1;
+	VoxelShapeFilter &outer_filter = shape1_outside? shape_filter1 : shape_filter2;
+	VoxelShapeFilter &inner_filter = shape1_outside? shape_filter2 : shape_filter1;
 
-		auto inner_visitor = [shape1, shape2, outer_shape, inner_shape, &box1, &box2, inScale1, inScale2, outer_scale, inner_scale, outer_transform, inner_transform, inner_to_outer, inv_outer_scale, outer_separation, shape1_outside, &inRun, &inSubShapeIDCreator1, &inSubShapeIDCreator2, &inCollideShapeSettings, &ioCollector, &shape_filter2](SubShapeID::Type inInnerVoxelIndex, Vec3Arg inInnerVoxelCenter) {
-			// Narrow the run down to the voxels this one can reach before paying for GJK.
-			// Mapping the fine voxel into the coarse grid names far fewer bystanders than
-			// mapping the coarse voxel into the fine grid did, because a box picks up the
-			// inflation of being re-axis-aligned in whichever grid it lands in.
-			AABox inner_voxel_in_outer = AABox(inInnerVoxelCenter - inner_shape->mVoxelHalfExtent, inInnerVoxelCenter + inner_shape->mVoxelHalfExtent).Scaled(inner_scale).Transformed(inner_to_outer).Scaled(inv_outer_scale);
-			inner_voxel_in_outer.ExpandBy(outer_separation);
-			VoxelRange reach = outer_shape->GetVoxelRangeOverlappingLocalBounds(inner_voxel_in_outer, true);
+	BrickBox outer_boxes[cMaxBrickBoxes];
+	AABox outer_box_bounds[cMaxBrickBoxes];
+	AABox outer_box_reach[cMaxBrickBoxes];
+	uint outer_box_count = 0;
+	BrickBox inner_boxes[cMaxBrickBoxes];
 
-			uint min_x = max(reach.mMinX, inRun.mMinX), max_x = min(reach.mMaxX, inRun.mMaxX);
-			uint min_y = max(reach.mMinY, inRun.mMinY), max_y = min(reach.mMaxY, inRun.mMaxY);
-			uint min_z = max(reach.mMinZ, inRun.mMinZ), max_z = min(reach.mMaxZ, inRun.mMaxZ);
-			if (min_x >= max_x || min_y >= max_y || min_z >= max_z)
-				return true;
+	auto inner_visitor = [&](uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) {
+		uint inner_box_count = sDecomposeBrick(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask, inner_boxes);
+		for (uint inner_index = 0; inner_index < inner_box_count; ++inner_index)
+		{
+			const BrickBox &inner_box = inner_boxes[inner_index];
+			AABox inner_bounds = inner_shape->GetBrickBoxLocalBounds(inner_box);
+			AABox inner_in_outer = inner_bounds.Scaled(inner_scale).Transformed(inner_to_outer).Scaled(inv_outer_scale);
+			BoxShape inner_box_shape = inner_shape->CreateBrickBoxShape(inner_bounds);
+			Mat44 inner_box_transform = inner_transform.PreTranslated(inner_scale * inner_bounds.GetCenter());
+			SubShapeIDCreator inner_creator = inner_shape->MakeVoxelSubShapeIDCreator(inner_side.mSubShapeIDCreator, inner_shape->GetFirstVoxelIndex(inner_box));
+			inner_side.mBox = &inner_box;
+			inner_filter.SetBoxShape(&inner_box_shape);
 
-			JPH_IF_DEBUG_RENDERER(inner_shape->RecordTouchedVoxel(inInnerVoxelIndex);)
-			Mat44 inner_voxel_transform = inner_transform.PreTranslated(inner_scale * inInnerVoxelCenter);
+			for (uint outer_index = 0; outer_index < outer_box_count; ++outer_index)
+			{
+				if (!outer_box_reach[outer_index].Overlaps(inner_in_outer))
+					continue;
 
-			for (uint z = min_z; z < max_z; ++z)
-				for (uint y = min_y; y < max_y; ++y)
-					for (uint x = min_x; x < max_x; ++x)
-					{
-						SubShapeID::Type outer_voxel_index = x + y * outer_shape->mSizeX + z * outer_shape->mSizeX * outer_shape->mSizeY;
-						JPH_IF_DEBUG_RENDERER(outer_shape->RecordTouchedVoxel(outer_voxel_index);)
-						Mat44 outer_voxel_transform = outer_transform.PreTranslated(outer_scale * outer_shape->GetVoxelCenter(x, y, z));
+				const BrickBox &outer_box = outer_boxes[outer_index];
+				BoxShape outer_box_shape = outer_shape->CreateBrickBoxShape(outer_box_bounds[outer_index]);
+				Mat44 outer_box_transform = outer_transform.PreTranslated(outer_scale * outer_box_bounds[outer_index].GetCenter());
+				SubShapeIDCreator outer_creator = outer_shape->MakeVoxelSubShapeIDCreator(outer_side.mSubShapeIDCreator, outer_shape->GetFirstVoxelIndex(outer_box));
+				outer_side.mBox = &outer_box;
+				outer_filter.SetBoxShape(&outer_box_shape);
+				BrickBoxHitCollector collector(ioCollector, side1, side2);
 
-						// Which grid drove the walk is ours to choose, but which shape the
-						// collector calls the first one is not, so shape 1 stays on the left.
-						if (shape1_outside)
-							CollisionDispatch::sCollideShapeVsShape(&box1, &box2, inScale1, inScale2, outer_voxel_transform, inner_voxel_transform, shape1->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator1, outer_voxel_index), shape2->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator2, inInnerVoxelIndex), inCollideShapeSettings, ioCollector, shape_filter2);
-						else
-							CollisionDispatch::sCollideShapeVsShape(&box1, &box2, inScale1, inScale2, inner_voxel_transform, outer_voxel_transform, shape1->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator1, inInnerVoxelIndex), shape2->MakeVoxelSubShapeIDCreator(inSubShapeIDCreator2, outer_voxel_index), inCollideShapeSettings, ioCollector, shape_filter2);
+				// Which grid drove the walk is ours to choose, but which shape the
+				// collector calls the first one is not, so shape 1 stays on the left.
+				if (shape1_outside)
+					CollisionDispatch::sCollideShapeVsShape(&outer_box_shape, &inner_box_shape, inScale1, inScale2, outer_box_transform, inner_box_transform, outer_creator, inner_creator, inCollideShapeSettings, collector, shape_filter2);
+				else
+					CollisionDispatch::sCollideShapeVsShape(&inner_box_shape, &outer_box_shape, inScale1, inScale2, inner_box_transform, outer_box_transform, inner_creator, outer_creator, inCollideShapeSettings, collector, shape_filter2);
 
-						if (ioCollector.ShouldEarlyOut())
-							return false;
-					}
+				if (ioCollector.ShouldEarlyOut())
+					return false;
+			}
+		}
+		return true;
+	};
 
+	auto outer_visitor = [&](uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) {
+		if (!outer_shape->GetBrickLocalBounds(inBrickX, inBrickY, inBrickZ).Scaled(outer_scale).Transformed(outer_transform).Overlaps(shared_world_bounds))
 			return true;
-		};
-		inner_shape->WalkVoxels(inner_range, inner_visitor, false);
+
+		outer_box_count = sDecomposeBrick(inBrickX, inBrickY, inBrickZ, inSurfaceMask, inSolidMask, outer_boxes);
+		AABox outer_boxes_bounds;
+		for (uint outer_index = 0; outer_index < outer_box_count; ++outer_index)
+		{
+			outer_box_bounds[outer_index] = outer_shape->GetBrickBoxLocalBounds(outer_boxes[outer_index]);
+			outer_box_reach[outer_index] = outer_box_bounds[outer_index];
+			outer_box_reach[outer_index].ExpandBy(outer_separation);
+			outer_boxes_bounds.Encapsulate(outer_box_bounds[outer_index]);
+		}
+
+		AABox reach_in_inner = outer_boxes_bounds.Scaled(outer_scale).Transformed(outer_to_inner).Scaled(inv_inner_scale);
+		reach_in_inner.ExpandBy(inner_separation);
+		inner_shape->WalkSurfaceBricks(inner_shape->GetVoxelRangeOverlappingLocalBounds(reach_in_inner, true), inner_visitor);
 		return !ioCollector.ShouldEarlyOut();
 	};
-	outer_shape->WalkVoxelRanges(outer_range, run_visitor, 0, &outer_range_filter);
+	outer_shape->WalkSurfaceBricks(outer_range, outer_visitor, &outer_range_filter);
 }
 
 void VoxelShape::sCastVoxelVsShape(const ShapeCast &inShapeCast, const ShapeCastSettings &inShapeCastSettings, const Shape *inShape, Vec3Arg inScale, const ShapeFilter &inShapeFilter, Mat44Arg inCenterOfMassTransform2, const SubShapeIDCreator &inSubShapeIDCreator1, const SubShapeIDCreator &inSubShapeIDCreator2, CastShapeCollector &ioCollector)

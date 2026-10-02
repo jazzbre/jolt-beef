@@ -51,6 +51,17 @@ public:
 	virtual bool			VisitRange(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ) = 0;
 };
 
+/// Visitor for 4x4x4 voxel bricks. Masks hold one bit per voxel at x + 4 * y + 16 * z;
+/// surface voxels are the active collision voxels, solid voxels include the hidden ones.
+class JPH_EXPORT VoxelShapeDataBrickVisitor
+{
+public:
+	virtual					~VoxelShapeDataBrickVisitor() = default;
+
+	/// Return false to stop visiting.
+	virtual bool			VisitBrick(uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask) = 0;
+};
+
 /// Non-owned interface that lets VoxelShape query external voxel/chunk data.
 class JPH_EXPORT VoxelShapeDataInterface
 {
@@ -69,6 +80,10 @@ public:
 	/// Visit occupied voxel ranges in [min, max). Return false if traversal was aborted by the visitor.
 	virtual bool			VisitActiveVoxelRanges(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ, uint inRequiredExposedFaces, VoxelShapeDataRangeVisitor &ioVisitor, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const = 0;
 
+	/// Visit every brick overlapping [min, max) that has surface voxels, with unclipped masks.
+	/// The range filter may be asked about coarser blocks first. Return false if traversal was aborted by the visitor.
+	virtual bool			VisitSurfaceBricks(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ, VoxelShapeDataBrickVisitor &ioVisitor, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const = 0;
+
 	/// Closest ray cast. Must return the first active voxel hit by the ray and a Jolt ray fraction.
 	virtual bool			CastRayClosest(const RayCast &inRay, float inMaxFraction, Vec3Arg inVoxelHalfExtent, uint inSizeX, uint inSizeY, uint inSizeZ, SubShapeID::Type &outVoxelIndex, float &outFraction) const = 0;
 
@@ -80,7 +95,6 @@ public:
 };
 
 /// Class that constructs a VoxelShape.
-/// This is currently a placeholder shape that treats every occupied voxel as a box.
 /// The voxel data interface pointer is not owned by the shape and must remain valid for the lifetime of the shape.
 class JPH_EXPORT VoxelShapeSettings final : public ShapeSettings
 {
@@ -103,7 +117,8 @@ public:
 	uint					mVoxelIndexBits = 0;									///< Number of SubShapeID bits reserved for the voxel index
 };
 
-/// Placeholder shape for voxel collision. Each occupied voxel currently collides as a box.
+/// Voxel collision shape. Collide queries merge the surface voxels of each 4x4x4 brick into
+/// boxes and report contacts against the voxel nearest each contact point.
 class JPH_EXPORT VoxelShape final : public Shape
 {
 public:
@@ -161,18 +176,6 @@ public:
 	virtual void			GetSubmergedVolume(Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, const Plane &inSurface, float &outTotalVolume, float &outSubmergedVolume, Vec3 &outCenterOfBuoyancy JPH_IF_DEBUG_RENDERER(, RVec3Arg inBaseOffset)) const override;
 #ifdef JPH_DEBUG_RENDERER
 	virtual void			Draw(DebugRenderer *inRenderer, RMat44Arg inCenterOfMassTransform, Vec3Arg inScale, ColorArg inColor, bool inUseMaterialColors, bool inDrawWireframe) const override;
-
-	/// When enabled, every active voxel visited by WalkVoxels is stored in mTouchedVoxels.
-	static bool				sRecordTouchedVoxels;
-
-	/// When enabled, Draw overlays recorded touched voxels.
-	static bool				sDrawTouchedVoxels;
-
-	/// Clear the recorded touched voxel list. Call before the query/update you want to inspect.
-	void					ClearTouchedVoxels() const								{ mTouchedVoxels.clear(); }
-
-	/// Get the flat voxel indices that were touched since the last ClearTouchedVoxels call.
-	const Array<SubShapeID::Type> &GetTouchedVoxels() const							{ return mTouchedVoxels; }
 #endif // JPH_DEBUG_RENDERER
 	virtual bool			CastRay(const RayCast &inRay, const SubShapeIDCreator &inSubShapeIDCreator, RayCastResult &ioHit) const override;
 	virtual void			CastRay(const RayCast &inRay, const RayCastSettings &inRayCastSettings, const SubShapeIDCreator &inSubShapeIDCreator, CastRayCollector &ioCollector, const ShapeFilter &inShapeFilter = { }) const override;
@@ -194,14 +197,29 @@ private:
 	friend class			WorldBoundsVoxelRangeFilter;
 
 	class					VoxelShapeFilter;
+	class					BrickBoxHitCollector;
 	struct					GetTrianglesContextVoxel;
 	struct					VoxelRange;
+	struct					BrickBox;
+	struct					BrickBoxContactSide;
+
+	/// Covers the surface voxels of one brick with boxes made of its solid voxels.
+	static uint				sDecomposeBrick(uint inBrickX, uint inBrickY, uint inBrickZ, uint64 inSurfaceMask, uint64 inSolidMask, BrickBox *outBoxes);
 
 	template <class Visitor>
-	void					WalkVoxels(Visitor &ioVisitor, bool inRecordTouchedVoxels = true) const;
+	void					WalkSurfaceBricks(const VoxelRange &inRange, Visitor &ioVisitor, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
+
+	AABox					GetBrickLocalBounds(uint inBrickX, uint inBrickY, uint inBrickZ) const;
+	AABox					GetBrickBoxLocalBounds(const BrickBox &inBox) const;
+	BoxShape				CreateBrickBoxShape(const AABox &inLocalBounds) const;
+	SubShapeID::Type		GetVoxelIndexInBrickBox(const BrickBox &inBox, Vec3Arg inLocalPoint) const;
+	SubShapeID::Type		GetFirstVoxelIndex(const BrickBox &inBox) const;
 
 	template <class Visitor>
-	void					WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, bool inRecordTouchedVoxels = true, uint inRequiredExposedFaces = 0, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
+	void					WalkVoxels(Visitor &ioVisitor) const;
+
+	template <class Visitor>
+	void					WalkVoxels(const VoxelRange &inRange, Visitor &ioVisitor, uint inRequiredExposedFaces = 0, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
 
 	template <class Visitor>
 	void					WalkVoxelRanges(const VoxelRange &inRange, Visitor &ioVisitor, uint inRequiredExposedFaces = 0, const VoxelShapeDataRangeFilter *inRangeFilter = nullptr) const;
@@ -222,9 +240,6 @@ private:
 	bool					IsVoxelActive(uint inX, uint inY, uint inZ, SubShapeID::Type inVoxelIndex) const;
 	Vec3					GetVoxelCenter(SubShapeID::Type inVoxelIndex) const;
 	Vec3					GetVoxelCenter(uint inX, uint inY, uint inZ) const;
-#ifdef JPH_DEBUG_RENDERER
-	void					RecordTouchedVoxel(SubShapeID::Type inVoxelIndex) const;
-#endif // JPH_DEBUG_RENDERER
 	SubShapeIDCreator		MakeVoxelSubShapeIDCreator(const SubShapeIDCreator &inSubShapeIDCreator, SubShapeID::Type inVoxelIndex) const;
 	BoxShape				CreateBoxShape() const;
 
@@ -246,9 +261,6 @@ private:
 	/// reported, which is the conservative answer.
 	AABox					mActiveBounds { Vec3::sZero(), Vec3::sZero() };
 	bool					mActiveBoundsValid = false;
-#ifdef JPH_DEBUG_RENDERER
-	mutable Array<SubShapeID::Type> mTouchedVoxels;
-#endif // JPH_DEBUG_RENDERER
 };
 
 JPH_NAMESPACE_END
