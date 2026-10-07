@@ -34,6 +34,7 @@ JPH_CAPI float JPH_VoxelShape_GetConvexRadius(const JPH_Shape *shape);
 /// building the shape and again after voxels are destroyed; leaving it stale is safe,
 /// only conservative.
 JPH_CAPI void JPH_VoxelShape_RefreshActiveBounds(JPH_Shape *shape);
+JPH_CAPI void JPH_VoxelShape_SetMassProperties(JPH_Shape *shape, const JPH_MassProperties *massProperties);
 JPH_CAPI uint64_t JPH_VoxelShape_GetVoxelIndexFromSubShapeID(const JPH_Shape *shape, JPH_SubShapeID subShapeID);
 
 #ifdef __cplusplus

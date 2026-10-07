@@ -163,6 +163,10 @@ public:
 	/// than the truth, never smaller, and larger costs work rather than correctness.
 	void					RefreshActiveBounds();
 
+	/// Replaces the per-run voxel walk in GetMassProperties. Must use the default box
+	/// density, so compound children stay weighted against each other the same way.
+	void					SetMassProperties(const MassProperties &inMassProperties)	{ mMassProperties = inMassProperties; mMassPropertiesValid = true; }
+
 	// See Shape
 	virtual AABox			GetLocalBounds() const override;
 	virtual uint			GetSubShapeIDBitsRecursive() const override				{ return mVoxelIndexBits; }
@@ -261,6 +265,8 @@ private:
 	/// reported, which is the conservative answer.
 	AABox					mActiveBounds { Vec3::sZero(), Vec3::sZero() };
 	bool					mActiveBoundsValid = false;
+	MassProperties			mMassProperties;
+	bool					mMassPropertiesValid = false;
 };
 
 JPH_NAMESPACE_END

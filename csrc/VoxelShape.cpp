@@ -703,6 +703,9 @@ void VoxelShape::RefreshActiveBounds()
 
 MassProperties VoxelShape::GetMassProperties() const
 {
+	if (mMassPropertiesValid)
+		return mMassProperties;
+
 	BoxShape box = CreateBoxShape();
 	MassProperties total;
 	auto accumulateRangeMass = [this, &box, &total](const VoxelRange &inRange) {

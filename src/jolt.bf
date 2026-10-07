@@ -2070,6 +2070,9 @@ public static class JPH
 	public static extern void JPH_VoxelShape_RefreshActiveBounds(Shape* shape);
 
 	[CLink, CallingConvention(.Cdecl)]
+	public static extern void JPH_VoxelShape_SetMassProperties(Shape* shape, MassProperties* massProperties);
+
+	[CLink, CallingConvention(.Cdecl)]
 	public static extern uint64 JPH_VoxelShape_GetVoxelIndexFromSubShapeID(Shape* shape, SubShapeID subShapeId);
 
 	[CLink, CallingConvention(.Cdecl)]
@@ -5574,6 +5577,12 @@ public struct ShapeRef
 	public void RefreshActiveBounds()
 	{
 		JPH.JPH_VoxelShape_RefreshActiveBounds(Handle);
+	}
+
+	public void SetVoxelMassProperties(MassProperties massProperties)
+	{
+		var massPropertiesCopy = massProperties;
+		JPH.JPH_VoxelShape_SetMassProperties(Handle, &massPropertiesCopy);
 	}
 
 	public void Destroy() mut

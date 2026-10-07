@@ -9,6 +9,7 @@
 // a VoxelShapeDataInterface.
 
 #include <Jolt/Jolt.h>
+#include <cstring>
 
 #include "jolt_voxel_shape.h"
 #include "jolt_voxel_shape_c.h"
@@ -240,6 +241,19 @@ void JPH_VoxelShape_RefreshActiveBounds(JPH_Shape* inShape)
 	JPH::VoxelShape* shape = const_cast<JPH::VoxelShape*>(AsVoxelShape(inShape));
 	if (shape != nullptr)
 		shape->RefreshActiveBounds();
+}
+
+void JPH_VoxelShape_SetMassProperties(JPH_Shape* inShape, const JPH_MassProperties* inMassProperties)
+{
+	JPH::VoxelShape* shape = const_cast<JPH::VoxelShape*>(AsVoxelShape(inShape));
+	if (shape == nullptr || inMassProperties == nullptr)
+		return;
+
+	JPH::MassProperties mass_properties;
+	mass_properties.mMass = inMassProperties->mass;
+	static_assert(sizeof(JPH_Mat4) == sizeof(JPH::Mat44));
+	std::memcpy(&mass_properties.mInertia, &inMassProperties->inertia, sizeof(JPH::Mat44));
+	shape->SetMassProperties(mass_properties);
 }
 
 uint64_t JPH_VoxelShape_GetVoxelIndexFromSubShapeID(const JPH_Shape* inShape, JPH_SubShapeID inSubShapeID) {
