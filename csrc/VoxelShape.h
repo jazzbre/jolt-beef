@@ -199,6 +199,7 @@ private:
 	template <class Visitor> friend class VoxelDataVisitorAdapter;
 	template <class Visitor> friend class VoxelDataRangeVisitorAdapter;
 	friend class			WorldBoundsVoxelRangeFilter;
+	friend class			NearOtherVoxelsRangeFilter;
 
 	class					VoxelShapeFilter;
 	class					BrickBoxHitCollector;

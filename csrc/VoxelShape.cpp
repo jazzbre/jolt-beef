@@ -5,6 +5,7 @@
 #include <Jolt/Jolt.h>
 
 #include <VoxelShape.h>
+#include <Jolt/Geometry/OrientedBox.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/PhysicsMaterial.h>
@@ -573,6 +574,50 @@ private:
 	AABox				mWorldBounds;
 };
 
+/// Passes a range only while the other voxel shape has active voxels within reach of it. A
+/// shape can sit well inside another's bounds without either surface being near, and every
+/// surface brick the walk keeps there costs a search of the other grid.
+class NearOtherVoxelsRangeFilter final : public VoxelShapeDataRangeFilter
+{
+public:
+	NearOtherVoxelsRangeFilter(const VoxelShape *inShape, Vec3Arg inScale, Mat44Arg inCenterOfMassTransform, const AABox &inWorldBounds,
+		const VoxelShape *inOtherShape, Mat44Arg inShapeToOther, Vec3Arg inInverseOtherScale, Vec3Arg inOtherSeparation) :
+		mShape(inShape),
+		mScale(inScale),
+		mCenterOfMassTransform(inCenterOfMassTransform),
+		mWorldBounds(inWorldBounds),
+		mOtherShape(inOtherShape),
+		mShapeToOther(inShapeToOther),
+		mInverseOtherScale(inInverseOtherScale),
+		mOtherSeparation(inOtherSeparation)
+	{
+	}
+
+	virtual bool ShouldVisitRange(uint inMinX, uint inMinY, uint inMinZ, uint inMaxX, uint inMaxY, uint inMaxZ) const override
+	{
+		AABox range_bounds = mShape->GetVoxelRangeLocalBounds(inMinX, inMinY, inMinZ, inMaxX, inMaxY, inMaxZ).Scaled(mScale);
+		if (!range_bounds.Transformed(mCenterOfMassTransform).Overlaps(mWorldBounds))
+			return false;
+
+		AABox reach_in_other = range_bounds.Transformed(mShapeToOther).Scaled(mInverseOtherScale);
+		reach_in_other.ExpandBy(mOtherSeparation);
+		VoxelShape::VoxelRange other_range = mOtherShape->GetVoxelRangeOverlappingLocalBounds(reach_in_other, true);
+		if (other_range.mMinX >= other_range.mMaxX || other_range.mMinY >= other_range.mMaxY || other_range.mMinZ >= other_range.mMaxZ)
+			return false;
+		return mOtherShape->HasActiveVoxels(other_range);
+	}
+
+private:
+	const VoxelShape *	mShape;
+	Vec3				mScale;
+	Mat44				mCenterOfMassTransform;
+	AABox				mWorldBounds;
+	const VoxelShape *	mOtherShape;
+	Mat44				mShapeToOther;
+	Vec3				mInverseOtherScale;
+	Vec3				mOtherSeparation;
+};
+
 bool VoxelShape::IsVoxelActive(SubShapeID::Type inVoxelIndex) const
 {
 	if (mSizeX == 0 || mSizeY == 0 || mSizeZ == 0)
@@ -1067,7 +1112,18 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 	world_bounds2.ExpandBy(separation_distance);
 	AABox shared_world_bounds = world_bounds1.Intersect(world_bounds2);
 	if (!shared_world_bounds.IsValid())
+	{
 		return;
+	}
+
+	OrientedBox shape1_oriented_bounds(inCenterOfMassTransform1, shape1->GetLocalBounds().Scaled(inScale1));
+	OrientedBox shape2_oriented_bounds(inCenterOfMassTransform2, shape2->GetLocalBounds().Scaled(inScale2));
+	shape1_oriented_bounds.mHalfExtents += separation_distance;
+	shape2_oriented_bounds.mHalfExtents += separation_distance;
+	if (!shape1_oriented_bounds.Overlaps(shape2_oriented_bounds))
+	{
+		return;
+	}
 
 	VoxelShapeFilter shape_filter1(inShapeFilter, shape1, nullptr);
 	VoxelShapeFilter shape_filter2(shape_filter1, shape2, nullptr);
@@ -1090,7 +1146,7 @@ void VoxelShape::sCollideVoxelVsVoxel(const Shape *inShape1, const Shape *inShap
 
 	AABox shared_bounds_in_outer = shared_world_bounds.Transformed(inverse_outer_transform).Scaled(inv_outer_scale);
 	VoxelRange outer_range = outer_shape->GetVoxelRangeOverlappingLocalBounds(shared_bounds_in_outer, true);
-	WorldBoundsVoxelRangeFilter outer_range_filter(outer_shape, outer_scale, outer_transform, shared_world_bounds);
+	NearOtherVoxelsRangeFilter outer_range_filter(outer_shape, outer_scale, outer_transform, shared_world_bounds, inner_shape, outer_to_inner, inv_inner_scale, inner_separation);
 
 	BrickBoxContactSide side1 { shape1, inCenterOfMassTransform1.InversedRotationTranslation(), Vec3::sOne() / inScale1, inSubShapeIDCreator1 };
 	BrickBoxContactSide side2 { shape2, inCenterOfMassTransform2.InversedRotationTranslation(), Vec3::sOne() / inScale2, inSubShapeIDCreator2 };
@@ -1213,6 +1269,12 @@ void VoxelShape::sRegister()
 
 	for (EShapeSubType s : sAllSubShapeTypes)
 	{
+		// Compounds register before this, and their handlers have to stay: they descend to the
+		// children and land in voxel vs voxel. Taken over here, a whole compound gets collided
+		// against every voxel brick inside its bounds.
+		if (s == EShapeSubType::StaticCompound || s == EShapeSubType::MutableCompound)
+			continue;
+
 		CollisionDispatch::sRegisterCollideShape(EShapeSubType::User1, s, sCollideVoxelVsShape);
 		CollisionDispatch::sRegisterCollideShape(s, EShapeSubType::User1, sCollideShapeVsVoxel);
 		CollisionDispatch::sRegisterCastShape(EShapeSubType::User1, s, sCastVoxelVsShape);
